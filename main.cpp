@@ -410,7 +410,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			// ゲームの処理
 			// 文字列を格納する
 			std::string str0{ "STRING!!" };
-
+			
 			// 整数を文字列にする
 			std::string str1{ std::to_string(10) };
 		}
