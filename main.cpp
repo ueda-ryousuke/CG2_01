@@ -15,6 +15,8 @@
 #include <strsafe.h>
 // Debug用のあれやこれやを使えるようにする
 #include <DbgHelp.h>
+//#include <dxcapi.h>
+//#pragma comment(lib, "dxcompiler.lib")
 #pragma comment(lib, "Dbghelp.lib")
 
 #pragma comment(lib, "d3d12.lib")
@@ -96,6 +98,27 @@ std::string ConvertString(const std::wstring& str)
 // ウィンドウプロシージャ
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
+
+
+
+//IDxcBlob* CompileShader(
+//	//CompilerするShaderファイルへのパス
+//	const std::wstring& filePath,
+//	//Compilerに使用するProfile
+//	const wchar_t* profile,
+//	//初期化で生成したものを3つ
+//	IDxcUtils* dxcUtils,
+//	IDxcCompiler3* dxcCompiler,
+//	IDxcIncludeHandler* includeHandler)
+//
+//{
+//
+//	    //ここの中身をこの後書いていく
+//		//1. hlslファイルを読む
+//		//2. Compileする
+//		//3.警告·エラーがでていないか確認する
+//		//4.Compile結果を受け取って返す
+//}
 // Windowsアプリでのエントリーポイント(main関数)
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 {
@@ -163,7 +186,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 #ifdef DEBUG
 
 	ID3D12Debug1* debugController = nullptr;
-	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&SdebugController))))
+	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
 	{
 		//デバッグレイヤーを有効化する
 		debugController->EnableDebugLayer();
@@ -248,10 +271,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true);
 		// 警告時に止まる
 		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, true);
+		//抑制するメッセージのID
 		//解放
 		infoQueue->Release();
 
-		//抑制するメッセージのID
 		D3D12_MESSAGE_ID denyIds[] = {
 			//Windows11でのDXGIデバッグレイヤーとDX12デバッグレイヤーの相互作用バグによるエラーメッセージ
 			// https://stackoverflow.com/questions/69805245/directx-12-application-is-crashing-in-windows-11
@@ -336,6 +359,19 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	rtvHandles[1].ptr = rtvHandles[0].ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	//2つ目を作る
 	device->CreateRenderTargetView(swapChainResources[1], &rtvDesc, rtvHandles[1]);
+
+	//dxcCompilerを初期化
+	//IDxcUtils* dxcUtils = nullptr;
+	//IDxcCompiler3* dxcCompiler = nullptr;
+	//hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils));
+	//assert(SUCCEEDED(hr));
+	//hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler));
+	//assert(SUCCEEDED(hr));
+	////現時点でincludeはしないが、includeに対応するための設定を行っておく
+	//IDxcIncludeHandler* includeHandler = nullptr;
+	//hr = dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
+	//assert(SUCCEEDED(hr));
+
 
 
 	// ウィンドウの×ボタンが押されるまでループ

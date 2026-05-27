@@ -1,6 +1,8 @@
 [*.{cpp,h}]
 charset = utf-8
+[ *. {cpp, h, hlsl,hlsli}]
 
+charset = utf-8
 # スペルミスをintellisense上での「エラー」として扱う
 spelling_error_severity = error
 # チェック対象を「識別子(変数名など)」と「コメント」に限定する
