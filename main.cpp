@@ -23,6 +23,12 @@
 #include <DbgHelp.h>		// Debug用のあれやこれやを使えるようにする
 #include <strsafe.h>		// Dumpを出力
 
+// 【追加】ImGuiのincludeと外部関数の宣言
+#include "externals/imgui/imgui.h"
+#include "externals/imgui/imgui_impl_dx12.h"
+#include "externals/imgui/imgui_impl_win32.h"
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "dxguid.lib")
@@ -120,7 +126,7 @@ Matrix4x4 MakeAffineMatrix(const Vector3& scale, const Vector3& rotate, const Ve
 	return Multiply(mScale, Multiply(mRotate, mTranslate));
 }
 
-// 【追加】逆行列を計算する関数 (カメラ行列をビュー行列に変換するために必要)
+// 逆行列を計算する関数
 Matrix4x4 Inverse(const Matrix4x4& m)
 {
 	float scale =
@@ -159,7 +165,7 @@ Matrix4x4 Inverse(const Matrix4x4& m)
 	return result;
 }
 
-// 【追加】透視投影行列を作る関数 (スライド内の MakePerspectiveFovMatrix 用)
+// 透視投影行列を作る関数
 Matrix4x4 MakePerspectiveFovMatrix(float fovY, float aspect, float nearClip, float farClip)
 {
 	Matrix4x4 result = {};
@@ -173,6 +179,20 @@ Matrix4x4 MakePerspectiveFovMatrix(float fovY, float aspect, float nearClip, flo
 }
 
 ID3D12Resource* CreateBufferResource(ID3D12Device* device, size_t sizeInBytes);
+
+// 【追加】DescriptorHeapの作成関数
+ID3D12DescriptorHeap* CreateDescriptorHeap(
+	ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE heapType, UINT numDescriptors, bool shaderVisible)
+{
+	ID3D12DescriptorHeap* descriptorHeap = nullptr;
+	D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc{};
+	descriptorHeapDesc.Type = heapType;
+	descriptorHeapDesc.NumDescriptors = numDescriptors;
+	descriptorHeapDesc.Flags = shaderVisible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+	HRESULT hr = device->CreateDescriptorHeap(&descriptorHeapDesc, IID_PPV_ARGS(&descriptorHeap));
+	assert(SUCCEEDED(hr));
+	return descriptorHeap;
+}
 
 // ============================================================
 // Crash Dump Output
@@ -484,12 +504,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	hr = dxgiFactory->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, reinterpret_cast<IDXGISwapChain1**>(&swapChain));
 	assert(SUCCEEDED(hr));
 
-	ID3D12DescriptorHeap* rtvDescriptorHeap = nullptr;
-	D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc{};
-	rtvDescriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-	rtvDescriptorHeapDesc.NumDescriptors = 2;
-	hr = device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&rtvDescriptorHeap));
-	assert(SUCCEEDED(hr));
+	// 【変更】作成関数を使用して RTV用 DescriptorHeap を作成
+	ID3D12DescriptorHeap* rtvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+
+	// 【追加】作成関数を使用して SRV用 DescriptorHeap を作成
+	ID3D12DescriptorHeap* srvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 128, true);
 
 	ID3D12Resource* swapChainResources[2] = { nullptr };
 	hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainResources[0]));
@@ -553,7 +572,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	// Transformの初期値を設定
 	Transform transform{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
 
-	// 【追加】カメラ用のTransform初期値を設定 (スライドの指定値)
+	// カメラ用のTransform初期値を設定
 	Transform cameraTransform{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -5.0f} };
 	// ------------------------------------------------------------
 
@@ -621,6 +640,20 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	scissorRect.left = 0; scissorRect.right = kClientWidth;
 	scissorRect.top = 0; scissorRect.bottom = kClientHeight;
 
+	// 【追加】ImGuiの初期化（メインループが始まる前に行う）
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::StyleColorsDark();
+	ImGui_ImplWin32_Init(hwnd);
+	ImGui_ImplDX12_Init(device,
+		swapChainDesc.BufferCount,
+		rtvDesc.Format,
+		srvDescriptorHeap,
+		srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+		srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	ImGuiIO& io = ImGui::GetIO();
+	io.Fonts->Build();
+
 	while (msg.message != WM_QUIT)
 	{
 		if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
@@ -630,8 +663,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		}
 		else
 		{
+			// 【追加】フレームの先頭でImGuiにここからフレームが始まる旨を告げる
+			ImGui_ImplDX12_NewFrame();
+			ImGui_ImplWin32_NewFrame();
+			ImGui::NewFrame();
+
 			// ------------------------------------------------------------
-			// ゲームの処理（【変更箇所】スライドの内容を適用）
+			// ゲームの処理
 			// ------------------------------------------------------------
 			transform.rotate.y += 0.03f; // 三角形を回転させる
 
@@ -646,6 +684,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 			// GPU側のバッファへ書き込み
 			*wvpData = worldViewProjectionMatrix;
+
+			// 【追加】ゲームの更新処理でパラメータを変更したいタイミングでImGuiの処理を行う（デモUI表示）
+			ImGui::ShowDemoWindow();
+
+			// 【追加】ゲームの処理が終わリ描画処理に入る前に、ImGuiの内部コマンドを生成する
+			ImGui::Render();
 			// ------------------------------------------------------------
 
 			UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
@@ -661,6 +705,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			float clearColor[] = { 0.1f, 0.25f, 0.5f,1.0f };
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 
+			// 【追加】まずImGuiでも利用する描画用のDescriptorHeapを設定しておく
+			// ClearRenderTargetViewの後、実際の描画が始まる前に設定を行う
+			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
+			commandList->SetDescriptorHeaps(1, descriptorHeaps);
+
 			commandList->RSSetViewports(1, &viewport);
 			commandList->RSSetScissorRects(1, &scissorRect);
 			commandList->SetGraphicsRootSignature(rootSignature);
@@ -672,6 +721,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
 
 			commandList->DrawInstanced(3, 1, 0, 0);
+
+			// 【追加】諸々の描画処理が終わったタイミングでImGuiの描画コマンドを積む
+			// GUIは画面の最前面に映すので、一番最後の描画として行う
+			// ただし、ResourceBarrierによってD3D12_RESOURCE_STATE_RENDER_TARGETからD3D12_RESOURCE_STATE_PRESENTへ遷移させる前でなければならない
+			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
 
 			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
@@ -698,9 +752,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		}
 	}
 
+	// 【追加】ゲームループが終わったらimguiの終了処理を行う（初期化と逆順に行う）
+	ImGui_ImplDX12_Shutdown();
+	ImGui_ImplWin32_Shutdown();
+	ImGui::DestroyContext();
+
 	CloseHandle(fenceEvent);
 	fence->Release();
 	rtvDescriptorHeap->Release();
+	srvDescriptorHeap->Release(); // 【追加】新しく作成したSRVヒープの解放
 	swapChainResources[0]->Release();
 	swapChainResources[1]->Release();
 	swapChain->Release();
@@ -736,6 +796,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
+	// 【追加】WindowProcの先頭でメッセージをImGuiに渡し、さらに処理されていたら後続の処理を打ち切る
+	if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam))
+	{
+		return true;
+	}
+
 	if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
 	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
