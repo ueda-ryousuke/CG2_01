@@ -23,11 +23,12 @@
 #include <DbgHelp.h>		// Debug用のあれやこれやを使えるようにする
 #include <strsafe.h>		// Dumpを出力
 
-// 【追加】ImGuiのincludeと外部関数の宣言
+#ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -180,7 +181,7 @@ Matrix4x4 MakePerspectiveFovMatrix(float fovY, float aspect, float nearClip, flo
 
 ID3D12Resource* CreateBufferResource(ID3D12Device* device, size_t sizeInBytes);
 
-// 【追加】DescriptorHeapの作成関数
+// 【変更】DescriptorHeapの作成関数（ImGui用のSRVヒープ等もここで作れるようにマクロで囲みはせずそのまま利用可能にします）
 ID3D12DescriptorHeap* CreateDescriptorHeap(
 	ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE heapType, UINT numDescriptors, bool shaderVisible)
 {
@@ -507,8 +508,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	// 【変更】作成関数を使用して RTV用 DescriptorHeap を作成
 	ID3D12DescriptorHeap* rtvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
 
-	// 【追加】作成関数を使用して SRV用 DescriptorHeap を作成
+	// 【変更】SRV用 DescriptorHeap の作成をマクロで条件付きコンパイルに変更（ImGuiを使用しない場合は生成しない、または別用途で使うなら残す。今回はImGui専用と仮定）
+#ifdef USE_IMGUI
 	ID3D12DescriptorHeap* srvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 128, true);
+#endif
 
 	ID3D12Resource* swapChainResources[2] = { nullptr };
 	hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainResources[0]));
@@ -640,7 +643,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	scissorRect.left = 0; scissorRect.right = kClientWidth;
 	scissorRect.top = 0; scissorRect.bottom = kClientHeight;
 
-	// 【追加】ImGuiの初期化（メインループが始まる前に行う）
+	// 【変更】ImGuiの初期化を条件付きコンパイルに変更
+#ifdef USE_IMGUI
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGui::StyleColorsDark();
@@ -653,6 +657,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 	ImGuiIO& io = ImGui::GetIO();
 	io.Fonts->Build();
+#endif
 
 	while (msg.message != WM_QUIT)
 	{
@@ -663,10 +668,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		}
 		else
 		{
-			// 【追加】フレームの先頭でImGuiにここからフレームが始まる旨を告げる
+			// 【変更】ImGuiフレーム開始を条件付きコンパイルに変更
+#ifdef USE_IMGUI
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
+#endif
 
 			// ------------------------------------------------------------
 			// ゲームの処理
@@ -685,11 +692,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			// GPU側のバッファへ書き込み
 			*wvpData = worldViewProjectionMatrix;
 
-			// 【追加】ゲームの更新処理でパラメータを変更したいタイミングでImGuiの処理を行う（デモUI表示）
+			// 【変更】ImGui表示とレンダーコマンド生成を条件付きコンパイルに変更
+#ifdef USE_IMGUI
 			ImGui::ShowDemoWindow();
-
-			// 【追加】ゲームの処理が終わリ描画処理に入る前に、ImGuiの内部コマンドを生成する
 			ImGui::Render();
+#endif
 			// ------------------------------------------------------------
 
 			UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
@@ -705,10 +712,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			float clearColor[] = { 0.1f, 0.25f, 0.5f,1.0f };
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 
-			// 【追加】まずImGuiでも利用する描画用のDescriptorHeapを設定しておく
-			// ClearRenderTargetViewの後、実際の描画が始まる前に設定を行う
+			// 【変更】DescriptorHeapの設定を条件付きコンパイルに変更
+#ifdef USE_IMGUI
 			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
 			commandList->SetDescriptorHeaps(1, descriptorHeaps);
+#endif
 
 			commandList->RSSetViewports(1, &viewport);
 			commandList->RSSetScissorRects(1, &scissorRect);
@@ -722,10 +730,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 			commandList->DrawInstanced(3, 1, 0, 0);
 
-			// 【追加】諸々の描画処理が終わったタイミングでImGuiの描画コマンドを積む
-			// GUIは画面の最前面に映すので、一番最後の描画として行う
-			// ただし、ResourceBarrierによってD3D12_RESOURCE_STATE_RENDER_TARGETからD3D12_RESOURCE_STATE_PRESENTへ遷移させる前でなければならない
+			// 【変更】ImGuiの描画処理呼び出しを条件付きコンパイルに変更
+#ifdef USE_IMGUI
 			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
+#endif
 
 			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
@@ -752,15 +760,19 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		}
 	}
 
-	// 【追加】ゲームループが終わったらimguiの終了処理を行う（初期化と逆順に行う）
+	// 【変更】ImGuiの終了処理を条件付きコンパイルに変更
+#ifdef USE_IMGUI
 	ImGui_ImplDX12_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
+#endif
 
 	CloseHandle(fenceEvent);
 	fence->Release();
 	rtvDescriptorHeap->Release();
-	srvDescriptorHeap->Release(); // 【追加】新しく作成したSRVヒープの解放
+#ifdef USE_IMGUI
+	srvDescriptorHeap->Release(); // 【変更】解放処理も条件付き
+#endif
 	swapChainResources[0]->Release();
 	swapChainResources[1]->Release();
 	swapChain->Release();
@@ -796,11 +808,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	// 【追加】WindowProcの先頭でメッセージをImGuiに渡し、さらに処理されていたら後続の処理を打ち切る
+	// 【変更】WndProcHandler呼び出し部を条件付きコンパイルに変更
+#ifdef USE_IMGUI
 	if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam))
 	{
 		return true;
 	}
+#endif
 
 	if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
 	return DefWindowProc(hwnd, msg, wparam, lparam);
