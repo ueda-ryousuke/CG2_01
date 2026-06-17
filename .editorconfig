@@ -11,7 +11,7 @@ spelling_checkable_types = identifiers,comments
 spelling_languages = en-us
 # 自分の辞書を作れるように標準の除外辞書設定はそのまま使用
 spelling_use_default_exclusion_dictionary = true
-# 自分の除外辞書を指定
+# 自分の除外辞書を指定0
 spelling_exclusion_path = ./exclusion.dic
 [externals/**]
 generated_code = true

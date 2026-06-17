@@ -73,4 +73,7 @@
   <ItemGroup>
     <Text Include="externals\imgui\LICENSE.txt" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Object3d.hlsli" />
+  </ItemGroup>
 </Project>
