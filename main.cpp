@@ -7,7 +7,7 @@
 #include <cassert>
 #include <vector>
 #include <wincodec.h> // WIC用のヘッダー
-#include <cmath>     // ★回転計算用に追加
+#include <cmath>     // 回転・数学計算用
 
 // DXCコンパイルに必要なヘッダーとライブラリ
 #include <dxcapi.h>
@@ -54,11 +54,78 @@ struct Material
 	Vector4 color;
 };
 
-// ★変形行列用構造体（b1に転送するデータ型 / 256バイトアライメントが必要）
+// 行列計算用の4x4行列構造体
+struct Matrix4x4
+{
+	float m[4][4];
+};
+
+// 変形行列用構造体（b1に転送するデータ型）
 struct TransformationMatrix
 {
-	float wvp[4][4];
+	Matrix4x4 wvp; // シェーダー側の float4x4 WVP と一致させる
 };
+
+// CPU側で扱うTransform構造体
+struct Transform
+{
+	float scale[3];
+	float rotate[3];
+	float translate[3];
+};
+
+// --- 行列計算用のヘルパー関数群 ---
+Matrix4x4 MakeIdentity4x4()
+{
+	Matrix4x4 result = {};
+	for (int i = 0; i < 4; ++i) result.m[i][i] = 1.0f;
+	return result;
+}
+
+Matrix4x4 MakeOrthographicMatrix(float left, float top, float right, float bottom, float nearClip, float farClip)
+{
+	Matrix4x4 result = {};
+	result.m[0][0] = 2.0f / (right - left);
+	result.m[1][1] = 2.0f / (top - bottom);
+	result.m[2][2] = 1.0f / (farClip - nearClip);
+	result.m[3][0] = (left + right) / (left - right);
+	result.m[3][1] = (top + bottom) / (bottom - top);
+	result.m[3][2] = nearClip / (nearClip - farClip);
+	result.m[3][3] = 1.0f;
+	return result;
+}
+
+// アフィン変換行列作成関数（警告 C4100 対策済み）
+Matrix4x4 MakeAffineMatrix(const float scale[3], const float rotate[3], const float translate[3])
+{
+	// 未使用引数 rotate による警告（C4100）およびそれに伴うエラー（C2220）を明示的に抑制
+	(void)rotate;
+
+	Matrix4x4 result = MakeIdentity4x4();
+	result.m[0][0] = scale[0];
+	result.m[1][1] = scale[1];
+	result.m[2][2] = scale[2];
+	result.m[3][0] = translate[0];
+	result.m[3][1] = translate[1];
+	result.m[3][2] = translate[2];
+	return result;
+}
+
+Matrix4x4 Multiply(const Matrix4x4& m1, const Matrix4x4& m2)
+{
+	Matrix4x4 result = {};
+	for (int i = 0; i < 4; ++i)
+	{
+		for (int j = 0; j < 4; ++j)
+		{
+			result.m[i][j] = m1.m[i][0] * m2.m[0][j] +
+				m1.m[i][1] * m2.m[1][j] +
+				m1.m[i][2] * m2.m[2][j] +
+				m1.m[i][3] * m2.m[3][j];
+		}
+	}
+	return result;
+}
 
 // WindowProc
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -241,7 +308,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);
 
 	HWND hwnd = CreateWindow(
-		wc.lpszClassName, L"CG2 - Depth Testing", WS_OVERLAPPEDWINDOW,
+		wc.lpszClassName, L"CG2 - Sprite Drawing", WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top,
 		nullptr, nullptr, wc.hInstance, nullptr
 	);
@@ -419,6 +486,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
 
 	D3D12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
+
+	// --- ① 3D三角形用のリソース設定 ---
 	D3D12_RESOURCE_DESC vertexResourceDesc{};
 	vertexResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 	vertexResourceDesc.Width = sizeof(Vertex) * 6;
@@ -438,17 +507,34 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	Vertex* vertexData = nullptr;
 	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-	// 1枚目の三角形
 	vertexData[0].position = { -0.5f, -0.5f, 0.0f, 1.0f }; vertexData[0].texcoord = { 0.0f, 1.0f };
 	vertexData[1].position = { 0.0f,  0.5f, 0.0f, 1.0f }; vertexData[1].texcoord = { 0.5f, 0.0f };
 	vertexData[2].position = { 0.5f, -0.5f, 0.0f, 1.0f }; vertexData[2].texcoord = { 1.0f, 1.0f };
-	// 2枚目の三角形（貫通データ）
 	vertexData[3].position = { -0.5f, -0.5f,  0.5f, 1.0f }; vertexData[3].texcoord = { 0.0f, 1.0f };
 	vertexData[4].position = { 0.0f,  0.0f,  0.0f, 1.0f }; vertexData[4].texcoord = { 0.5f, 0.0f };
 	vertexData[5].position = { 0.5f, -0.5f, -0.5f, 1.0f }; vertexData[5].texcoord = { 1.0f, 1.0f };
 	vertexResource->Unmap(0, nullptr);
 
-	// マテリアルバッファ作成
+	// --- ② 2Dスプライト用のリソース作成 [cite: 3] ---
+	ID3D12Resource* vertexResourceSprite = nullptr;
+	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSprite));
+
+	D3D12_VERTEX_BUFFER_VIEW vertexBufferViewSprite{};
+	vertexBufferViewSprite.BufferLocation = vertexResourceSprite->GetGPUVirtualAddress();
+	vertexBufferViewSprite.SizeInBytes = sizeof(Vertex) * 6;
+	vertexBufferViewSprite.StrideInBytes = sizeof(Vertex);
+
+	Vertex* vertexDataSprite = nullptr;
+	vertexResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&vertexDataSprite));
+	vertexDataSprite[0].position = { 0.0f, 360.0f, 0.0f, 1.0f };   vertexDataSprite[0].texcoord = { 0.0f, 1.0f };
+	vertexDataSprite[1].position = { 0.0f, 0.0f, 0.0f, 1.0f };     vertexDataSprite[1].texcoord = { 0.0f, 0.0f };
+	vertexDataSprite[2].position = { 640.0f, 360.0f, 0.0f, 1.0f }; vertexDataSprite[2].texcoord = { 1.0f, 1.0f };
+	vertexDataSprite[3].position = { 0.0f, 0.0f, 0.0f, 1.0f };     vertexDataSprite[3].texcoord = { 0.0f, 0.0f };
+	vertexDataSprite[4].position = { 640.0f, 0.0f, 0.0f, 1.0f };   vertexDataSprite[4].texcoord = { 1.0f, 0.0f };
+	vertexDataSprite[5].position = { 640.0f, 360.0f, 0.0f, 1.0f }; vertexDataSprite[5].texcoord = { 1.0f, 1.0f };
+	vertexResourceSprite->Unmap(0, nullptr);
+
+	// マテリアルバッファ作成（ImGuiで値を書き換えるためMap状態を維持）
 	D3D12_RESOURCE_DESC materialResourceDesc{};
 	materialResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 	materialResourceDesc.Width = (sizeof(Material) + 255) & ~255;
@@ -463,10 +549,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	Material* materialData = nullptr;
 	materialResource->Map(0, nullptr, reinterpret_cast<void**>(&materialData));
-	materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f };
-	materialResource->Unmap(0, nullptr);
+	materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f }; // 初期色は白
 
-	// ★変形行列バッファの作成（b1用）
+	// 3D用の変形行列バッファの作成
 	D3D12_RESOURCE_DESC wvpResourceDesc{};
 	wvpResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 	wvpResourceDesc.Width = (sizeof(TransformationMatrix) + 255) & ~255;
@@ -481,14 +566,18 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	TransformationMatrix* wvpData = nullptr;
 	wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
-	// 単位行列で初期化（メインループで毎フレーム更新するため、ここではUnmapしません）
-	for (int i = 0; i < 4; ++i)
-	{
-		for (int j = 0; j < 4; ++j)
-		{
-			wvpData->wvp[i][j] = (i == j) ? 1.0f : 0.0f;
-		}
-	}
+	wvpData->wvp = MakeIdentity4x4();
+
+	// --- ③ 2Dスプライト用の変形行列バッファ作成 [cite: 5] ---
+	ID3D12Resource* transformationMatrixResourceSprite = nullptr;
+	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&transformationMatrixResourceSprite));
+
+	TransformationMatrix* transformationMatrixDataSprite = nullptr;
+	transformationMatrixResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&transformationMatrixDataSprite));
+	transformationMatrixDataSprite->wvp = MakeIdentity4x4();
+
+	// CPU上で操作するスプライト用トランスフォーム（初期値） [cite: 5]
+	Transform transformSprite{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
 
 	// テクスチャロード
 	std::vector<uint8_t> textureData;
@@ -528,7 +617,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	ImGui_ImplDX12_Init(device, 2, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, srvDescriptorHeap, srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 #endif
 
-	// ★回転角度を保持する変数
 	float angle = 0.0f;
 
 	MSG msg{};
@@ -542,27 +630,53 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		else
 		{
 #ifdef USE_IMGUI
+			// ImGuiフレーム開始
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
+
+			// ★★★ ImGuiによるコントロールウィンドウの描画 [cite: 8] ★★★
+			ImGui::Begin("Settings");
+
+			// マテリアルの色設定 (b0バッファへ直接反映)
+			if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::ColorEdit4("color", &materialData->color.x);
+			}
+
+			// スプライトの変形設定 (Scale / Translate)
+			if (ImGui::CollapsingHeader("TransformSprite", ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				ImGui::SliderFloat2("scale", transformSprite.scale, 0.1f, 5.0f);
+				ImGui::SliderFloat2("translate", transformSprite.translate, -200.0f, 1000.0f);
+			}
+
+			ImGui::End();
 			ImGui::Render();
 #endif
-			// ★毎フレームのY軸回転行列の計算とバッファ更新
-			angle += 0.02f; // 回転速度の調整
+
+			// ① 3D用のY軸回転行列の計算とバッファ更新
+			angle += 0.02f;
 			float sinA = std::sin(angle);
 			float cosA = std::cos(angle);
 
-			TransformationMatrix rotateMatrix = {};
-			// 単位行列化
-			for (int i = 0; i < 4; ++i) rotateMatrix.wvp[i][i] = 1.0f;
-			// Y軸回転成分の設定
-			rotateMatrix.wvp[0][0] = cosA;
-			rotateMatrix.wvp[0][2] = -sinA;
-			rotateMatrix.wvp[2][0] = sinA;
-			rotateMatrix.wvp[2][2] = cosA;
+			Matrix4x4 rotateMatrix = MakeIdentity4x4();
+			rotateMatrix.m[0][0] = cosA;
+			rotateMatrix.m[0][2] = -sinA;
+			rotateMatrix.m[2][0] = sinA;
+			rotateMatrix.m[2][2] = cosA;
 
-			// GPU上のデータへコピー
-			std::memcpy(wvpData, &rotateMatrix, sizeof(TransformationMatrix));
+			wvpData->wvp = rotateMatrix;
+
+			// --- ④ スプライト用のWVP行列計算と書き込み（ImGuiで変更された値が反映される） [cite: 6] ---
+			Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
+			Matrix4x4 viewMatrixSprite = MakeIdentity4x4();
+			Matrix4x4 projectionMatrixSprite = MakeOrthographicMatrix(0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 100.0f);
+
+			Matrix4x4 worldViewMatrixSprite = Multiply(worldMatrixSprite, viewMatrixSprite);
+			Matrix4x4 worldViewProjectionMatrixSprite = Multiply(worldViewMatrixSprite, projectionMatrixSprite);
+
+			transformationMatrixDataSprite->wvp = worldViewProjectionMatrixSprite;
 
 			commandAllocator->Reset();
 			commandList->Reset(commandAllocator, nullptr);
@@ -591,17 +705,23 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			commandList->RSSetScissorRects(1, &scissorRect);
 			commandList->SetGraphicsRootSignature(rootSignature);
 			commandList->SetPipelineState(pipelineState);
-			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-			// 各定数バッファ・記述子テーブルのセット
 			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress()); // ★追加した行列バッファをセット
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 
+			// 1. 3D三角形の描画
+			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
+			commandList->DrawInstanced(6, 1, 0, 0);
+
+			// 2. 2Dスプライトの描画 [cite: 7]
+			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
+			commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
 			commandList->DrawInstanced(6, 1, 0, 0);
 
 #ifdef USE_IMGUI
+			// バックバッファにImGuiの描画コマンドを積み込む
 			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
 #endif
 			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -630,17 +750,30 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	ImGui::DestroyContext();
 #endif
 
-	// 後始末（新しく作ったリソースも漏れなく解放）
+	// アンマップ処理と解放処理
+	if (transformationMatrixResourceSprite)
+	{
+		transformationMatrixResourceSprite->Unmap(0, nullptr);
+		transformationMatrixResourceSprite->Release();
+	}
+	if (vertexResourceSprite)
+	{
+		vertexResourceSprite->Release();
+	}
 	if (wvpResource)
 	{
 		wvpResource->Unmap(0, nullptr);
 		wvpResource->Release();
 	}
+	if (materialResource)
+	{
+		materialResource->Unmap(0, nullptr);
+		materialResource->Release();
+	}
 
 	depthStencilResource->Release();
 	dsvDescriptorHeap->Release();
 	textureResource->Release();
-	materialResource->Release();
 	vertexResource->Release();
 	pipelineState->Release();
 	vertexShaderBlob->Release();
