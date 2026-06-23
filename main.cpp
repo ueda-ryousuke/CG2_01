@@ -5,8 +5,9 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <cassert>
-#include <vector>    
-#include <wincodec.h> // WIC用のヘッダーを追加
+#include <vector>
+#include <wincodec.h> // WIC用のヘッダー
+#include <cmath>     // ★回転計算用に追加
 
 // DXCコンパイルに必要なヘッダーとライブラリ
 #include <dxcapi.h>
@@ -18,9 +19,9 @@
 
 #pragma comment(lib,"d3d12.lib")
 #pragma comment(lib,"dxgi.lib")
-#pragma comment(lib,"Windowscodecs.lib") // WIC用のライブラリを追加
+#pragma comment(lib,"Windowscodecs.lib") // WIC用のライブラリ
 
-// 【設定】ImGuiを有効化するフラグとインクルード設定
+// ImGuiを有効化するフラグとインクルード設定
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
@@ -53,7 +54,13 @@ struct Material
 	Vector4 color;
 };
 
-// WindowProc の改造
+// ★変形行列用構造体（b1に転送するデータ型 / 256バイトアライメントが必要）
+struct TransformationMatrix
+{
+	float wvp[4][4];
+};
+
+// WindowProc
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
 #ifdef USE_IMGUI
@@ -62,116 +69,35 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return true;
 	}
 #endif
-
 	switch (msg)
 	{
 	case WM_DESTROY:
 		PostQuitMessage(0);
 		return 0;
 	}
-
 	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
-// string → wstring
+// ログ出力用ヘルパー（文字列変換）
 std::wstring ConvertString(const std::string& str)
 {
-	if (str.empty())
-	{
-		return std::wstring();
-	}
-
-	auto sizeNeeded = MultiByteToWideChar(
-		CP_UTF8,
-		0,
-		str.data(),
-		static_cast<int>(str.size()),
-		NULL,
-		0
-	);
-
-	if (sizeNeeded == 0)
-	{
-		return std::wstring();
-	}
-
+	if (str.empty()) return std::wstring();
+	auto sizeNeeded = MultiByteToWideChar(CP_UTF8, 0, str.data(), static_cast<int>(str.size()), NULL, 0);
 	std::wstring result(sizeNeeded, 0);
-
-	MultiByteToWideChar(
-		CP_UTF8,
-		0,
-		str.data(),
-		static_cast<int>(str.size()),
-		&result[0],
-		sizeNeeded
-	);
-
+	MultiByteToWideChar(CP_UTF8, 0, str.data(), static_cast<int>(str.size()), &result[0], sizeNeeded);
 	return result;
 }
 
-// wstring → string
-std::string ConvertString(const std::wstring& str)
-{
-	if (str.empty())
-	{
-		return std::string();
-	}
-
-	auto sizeNeeded = WideCharToMultiByte(
-		CP_UTF8,
-		0,
-		str.data(),
-		static_cast<int>(str.size()),
-		NULL,
-		0,
-		NULL,
-		NULL
-	);
-
-	if (sizeNeeded == 0)
-	{
-		return std::string();
-	}
-
-	std::string result(sizeNeeded, 0);
-
-	WideCharToMultiByte(
-		CP_UTF8,
-		0,
-		str.data(),
-		static_cast<int>(str.size()),
-		result.data(),
-		sizeNeeded,
-		NULL,
-		NULL
-	);
-
-	return result;
-}
-
-// ログ出力(string)
-void Log(const std::string& message)
-{
-	OutputDebugStringA(message.c_str());
-}
-
-// ログ出力(wstring)
-void Log(const std::wstring& message)
-{
-	OutputDebugStringW(message.c_str());
-}
+void Log(const std::string& message) { OutputDebugStringA(message.c_str()); }
+void Log(const std::wstring& message) { OutputDebugStringW(message.c_str()); }
 
 // CompileShader 関数
 IDxcBlob* CompileShader(
-	const std::wstring& filePath,
-	const wchar_t* profile,
-	IDxcUtils* dxcUtils,
-	IDxcCompiler3* dxcCompiler,
-	IDxcIncludeHandler* includeHandler)
+	const std::wstring& filePath, const wchar_t* profile,
+	IDxcUtils* dxcUtils, IDxcCompiler3* dxcCompiler, IDxcIncludeHandler* includeHandler)
 {
 	Log(std::format(L"Begin CompileShader, path:{}, profile:{}\n", filePath, profile));
 
-	// 1. hlslファイルを読む
 	IDxcBlobEncoding* shaderSource = nullptr;
 	HRESULT hr = dxcUtils->LoadFile(filePath.c_str(), nullptr, &shaderSource);
 	if (FAILED(hr))
@@ -185,28 +111,15 @@ IDxcBlob* CompileShader(
 	shaderSourceBuffer.Size = shaderSource->GetBufferSize();
 	shaderSourceBuffer.Encoding = DXC_CP_UTF8;
 
-	// 2. Compileする
 	LPCWSTR arguments[] = {
-		filePath.c_str(),
-		L"-E", L"main",
-		L"-T", profile,
-		L"-Zi", L"-Qembed_debug",
-		L"-Od",
-		L"-Zpr",
-		L"-HV", L"2021"
+		filePath.c_str(), L"-E", L"main", L"-T", profile,
+		L"-Zi", L"-Qembed_debug", L"-Od", L"-Zpr", L"-HV", L"2021"
 	};
 
 	IDxcResult* shaderResult = nullptr;
-	hr = dxcCompiler->Compile(
-		&shaderSourceBuffer,
-		arguments,
-		_countof(arguments),
-		includeHandler,
-		IID_PPV_ARGS(&shaderResult)
-	);
+	hr = dxcCompiler->Compile(&shaderSourceBuffer, arguments, _countof(arguments), includeHandler, IID_PPV_ARGS(&shaderResult));
 	assert(SUCCEEDED(hr));
 
-	// 3. 警告・エラーが出ていないか確認する
 	IDxcBlobUtf8* shaderError = nullptr;
 	shaderResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&shaderError), nullptr);
 	if (shaderError != nullptr && shaderError->GetStringLength() != 0)
@@ -215,16 +128,12 @@ IDxcBlob* CompileShader(
 		assert(false);
 	}
 
-	// 4. 結果を返して一時リソースを解放
 	IDxcBlob* shaderBlob = nullptr;
 	hr = shaderResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr);
 	assert(SUCCEEDED(hr));
 
-	Log(std::format(L"Compile Succeeded, path:{}, profile:{}\n", filePath, profile));
-
 	shaderSource->Release();
 	shaderResult->Release();
-
 	return shaderBlob;
 }
 
@@ -242,7 +151,7 @@ ID3D12DescriptorHeap* CreateDescriptorHeap(
 	return descriptorHeap;
 }
 
-// WICを使ってPNG画像を読み込む関数
+// WICテクスチャ読み込み関数
 void LoadTextureFile(const std::wstring& filePath, std::vector<uint8_t>& outData, D3D12_RESOURCE_DESC& outDesc)
 {
 	IWICImagingFactory* wicFactory = nullptr;
@@ -258,40 +167,14 @@ void LoadTextureFile(const std::wstring& filePath, std::vector<uint8_t>& outData
 	}
 
 	IWICBitmapFrameDecode* frame = nullptr;
-	hr = decoder->GetFrame(0, &frame);
-	assert(SUCCEEDED(hr));
+	decoder->GetFrame(0, &frame);
 
 	UINT width = 0, height = 0;
-	hr = frame->GetSize(&width, &height);
-	assert(SUCCEEDED(hr));
+	frame->GetSize(&width, &height);
 
-	WICPixelFormatGUID pixelFormat;
-	hr = frame->GetPixelFormat(&pixelFormat);
-	assert(SUCCEEDED(hr));
+	outData.resize(width * height * 4);
+	frame->CopyPixels(nullptr, width * 4, static_cast<UINT>(outData.size()), outData.data());
 
-	// RGBA 8bit 形式に強制変換するための処理
-	if (pixelFormat != GUID_WICPixelFormat32bppRGBA)
-	{
-		IWICFormatConverter* converter = nullptr;
-		hr = wicFactory->CreateFormatConverter(&converter);
-		assert(SUCCEEDED(hr));
-
-		hr = converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0f, WICBitmapPaletteTypeCustom);
-		assert(SUCCEEDED(hr));
-
-		outData.resize(width * height * 4);
-		hr = converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(outData.size()), outData.data());
-		assert(SUCCEEDED(hr));
-		converter->Release();
-	}
-	else
-	{
-		outData.resize(width * height * 4);
-		hr = frame->CopyPixels(nullptr, width * 4, static_cast<UINT>(outData.size()), outData.data());
-		assert(SUCCEEDED(hr));
-	}
-
-	// テクスチャリソース記述子の設定
 	outDesc = {};
 	outDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	outDesc.Width = width;
@@ -307,34 +190,61 @@ void LoadTextureFile(const std::wstring& filePath, std::vector<uint8_t>& outData
 	wicFactory->Release();
 }
 
+// 深度テクスチャリソースの生成関数
+ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t width, int32_t height)
+{
+	D3D12_RESOURCE_DESC resourceDesc{};
+	resourceDesc.Width = width;
+	resourceDesc.Height = height;
+	resourceDesc.MipLevels = 1;
+	resourceDesc.DepthOrArraySize = 1;
+	resourceDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	resourceDesc.SampleDesc.Count = 1;
+	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	resourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+	D3D12_HEAP_PROPERTIES heapProperties{};
+	heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+	D3D12_CLEAR_VALUE depthClearValue{};
+	depthClearValue.DepthStencil.Depth = 1.0f;
+	depthClearValue.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+
+	ID3D12Resource* resource = nullptr;
+	HRESULT hr = device->CreateCommittedResource(
+		&heapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&resourceDesc,
+		D3D12_RESOURCE_STATE_DEPTH_WRITE,
+		&depthClearValue,
+		IID_PPV_ARGS(&resource)
+	);
+	assert(SUCCEEDED(hr));
+
+	return resource;
+}
+
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 {
-	// COMライブラリの初期化 (WIC用)
 	CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-	Log(std::format("Hello, DirectX!\n"));
-	Log(std::format(L"ウィンドウサイズ : {} x {}\n", 1280, 720));
-
-	// ウィンドウクラス
 	WNDCLASS wc{};
 	wc.lpfnWndProc = WindowProc;
 	wc.lpszClassName = L"CG2WindowClass";
 	wc.hInstance = GetModuleHandle(nullptr);
 	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-
 	RegisterClass(&wc);
 
 	const int32_t kClientWidth = 1280;
 	const int32_t kClientHeight = 720;
-	RECT wrc = { 0,0,kClientWidth,kClientHeight };
+	RECT wrc = { 0, 0, kClientWidth, kClientHeight };
 	AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);
 
 	HWND hwnd = CreateWindow(
-		wc.lpszClassName, L"CG2", WS_OVERLAPPEDWINDOW,
+		wc.lpszClassName, L"CG2 - Depth Testing", WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top,
 		nullptr, nullptr, wc.hInstance, nullptr
 	);
-
 	ShowWindow(hwnd, SW_SHOW);
 
 	ID3D12Debug1* debugController = nullptr;
@@ -347,74 +257,33 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 #endif
 
 	IDXGIFactory7* dxgiFactory = nullptr;
-	HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
-	assert(SUCCEEDED(hr));
+	CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
 
 	IDXGIAdapter4* useAdapter = nullptr;
 	for (UINT i = 0; dxgiFactory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&useAdapter)) != DXGI_ERROR_NOT_FOUND; i++)
 	{
 		DXGI_ADAPTER_DESC3 adapterDesc{};
-		hr = useAdapter->GetDesc3(&adapterDesc);
-		assert(SUCCEEDED(hr));
-
-		if (!(adapterDesc.Flags & DXGI_ADAPTER_FLAG3_SOFTWARE))
-		{
-			Log(std::format(L"Use Adapter:{}\n", adapterDesc.Description));
-			break;
-		}
+		useAdapter->GetDesc3(&adapterDesc);
+		if (!(adapterDesc.Flags & DXGI_ADAPTER_FLAG3_SOFTWARE)) break;
 		useAdapter = nullptr;
 	}
-	assert(useAdapter != nullptr);
 
 	ID3D12Device* device = nullptr;
 	D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_12_2, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0 };
-	const char* featureLevelStrings[] = { "12.2", "12.1", "12.0" };
-
 	for (size_t i = 0; i < _countof(featureLevels); ++i)
 	{
-		hr = D3D12CreateDevice(useAdapter, featureLevels[i], IID_PPV_ARGS(&device));
-		if (SUCCEEDED(hr))
-		{
-			Log(std::format("FeatureLevel:{}\n", featureLevelStrings[i]));
-			break;
-		}
+		if (SUCCEEDED(D3D12CreateDevice(useAdapter, featureLevels[i], IID_PPV_ARGS(&device)))) break;
 	}
-	assert(device != nullptr);
-
-#ifdef _DEBUG
-	ID3D12InfoQueue* infoQueue = nullptr;
-	if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&infoQueue))))
-	{
-		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true);
-		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true);
-		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, true);
-
-		D3D12_MESSAGE_ID denyIds[] = { D3D12_MESSAGE_ID_RESOURCE_BARRIER_MISMATCHING_COMMAND_LIST_TYPE };
-		D3D12_MESSAGE_SEVERITY severities[] = { D3D12_MESSAGE_SEVERITY_INFO };
-
-		D3D12_INFO_QUEUE_FILTER filter{};
-		filter.DenyList.NumIDs = _countof(denyIds);
-		filter.DenyList.pIDList = denyIds;
-		filter.DenyList.NumSeverities = _countof(severities);
-		filter.DenyList.pSeverityList = severities;
-
-		infoQueue->PushStorageFilter(&filter);
-		infoQueue->Release();
-	}
-#endif
 
 	ID3D12CommandQueue* commandQueue = nullptr;
 	D3D12_COMMAND_QUEUE_DESC commandQueueDesc{};
-	hr = device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(&commandQueue));
-	assert(SUCCEEDED(hr));
+	device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(&commandQueue));
 
 	ID3D12CommandAllocator* commandAllocator = nullptr;
-	hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
-	assert(SUCCEEDED(hr));
+	device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
 
 	ID3D12GraphicsCommandList* commandList = nullptr;
-	hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
-	assert(SUCCEEDED(hr));
+	device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
 
 	IDXGISwapChain4* swapChain = nullptr;
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
@@ -425,16 +294,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	swapChainDesc.BufferCount = 2;
 	swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-
-	hr = dxgiFactory->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, reinterpret_cast<IDXGISwapChain1**>(&swapChain));
-	assert(SUCCEEDED(hr));
+	dxgiFactory->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, reinterpret_cast<IDXGISwapChain1**>(&swapChain));
 
 	ID3D12DescriptorHeap* rtvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
 	ID3D12DescriptorHeap* srvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 128, true);
+	ID3D12DescriptorHeap* dsvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
 
 	ID3D12Resource* swapChainResources[2] = { nullptr };
-	hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainResources[0])); assert(SUCCEEDED(hr));
-	hr = swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainResources[1])); assert(SUCCEEDED(hr));
+	swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainResources[0]));
+	swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainResources[1]));
 
 	D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
 	rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
@@ -444,34 +312,30 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[2];
 	rtvHandles[0] = rtvStartHandle;
 	device->CreateRenderTargetView(swapChainResources[0], &rtvDesc, rtvHandles[0]);
-
 	rtvHandles[1].ptr = rtvHandles[0].ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	device->CreateRenderTargetView(swapChainResources[1], &rtvDesc, rtvHandles[1]);
 
-	hr = commandList->Close();
-	assert(SUCCEEDED(hr));
+	ID3D12Resource* depthStencilResource = CreateDepthStencilTextureResource(device, kClientWidth, kClientHeight);
+	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+	dsvDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	device->CreateDepthStencilView(depthStencilResource, &dsvDesc, dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+	commandList->Close();
 
 	ID3D12Fence* fence = nullptr;
 	uint64_t fenceValue = 0;
-	hr = device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-	assert(SUCCEEDED(hr));
-
+	device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 	HANDLE fenceEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-	assert(fenceEvent != nullptr);
 
-	// DXCインターフェースの初期化
 	IDxcUtils* dxcUtils = nullptr;
 	IDxcCompiler3* dxcCompiler = nullptr;
 	IDxcIncludeHandler* includeHandler = nullptr;
+	DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils));
+	DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler));
+	dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
 
-	hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils));
-	assert(SUCCEEDED(hr));
-	hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler));
-	assert(SUCCEEDED(hr));
-	hr = dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
-	assert(SUCCEEDED(hr));
-
-	// ルートシグネチャの構築
+	// ルートシグネチャ設定
 	D3D12_ROOT_PARAMETER rootParameters[3] = {};
 	rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -497,10 +361,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	staticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
 	staticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
 	staticSamplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	staticSamplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-	staticSamplers[0].MaxAnisotropy = 1;
-	staticSamplers[0].MaxLOD = D3D12_FLOAT32_MAX;
-	staticSamplers[0].ShaderRegister = 0;
 	staticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
 	D3D12_ROOT_SIGNATURE_DESC descriptionRootSignature{};
@@ -512,37 +372,30 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	ID3DBlob* signatureBlob = nullptr;
 	ID3DBlob* errorBlob = nullptr;
-	hr = D3D12SerializeRootSignature(&descriptionRootSignature, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
-	if (FAILED(hr))
-	{
-		Log(reinterpret_cast<char*>(errorBlob->GetBufferPointer()));
-		assert(false);
-	}
-
+	D3D12SerializeRootSignature(&descriptionRootSignature, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
 	ID3D12RootSignature* rootSignature = nullptr;
-	hr = device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
-	assert(SUCCEEDED(hr));
+	device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
 
 	// インプットレイアウト
 	D3D12_INPUT_ELEMENT_DESC inputElementDescs[2] = {};
 	inputElementDescs[0].SemanticName = "POSITION";
 	inputElementDescs[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 	inputElementDescs[0].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
-
 	inputElementDescs[1].SemanticName = "TEXCOORD";
 	inputElementDescs[1].Format = DXGI_FORMAT_R32G32_FLOAT;
 	inputElementDescs[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
 
-	D3D12_INPUT_LAYOUT_DESC inputLayoutDesc{};
-	inputLayoutDesc.pInputElementDescs = inputElementDescs;
-	inputLayoutDesc.NumElements = _countof(inputElementDescs);
-
+	D3D12_INPUT_LAYOUT_DESC inputLayoutDesc{ inputElementDescs, _countof(inputElementDescs) };
 	D3D12_BLEND_DESC blendDesc{};
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
 	rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
 	rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
+
+	D3D12_DEPTH_STENCIL_DESC depthStencilDesc{};
+	depthStencilDesc.DepthEnable = true;
+	depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+	depthStencilDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
 	IDxcBlob* vertexShaderBlob = CompileShader(L"Object3D.VS.hlsl", L"vs_6_0", dxcUtils, dxcCompiler, includeHandler);
 	IDxcBlob* pixelShaderBlob = CompileShader(L"Object3D.PS.hlsl", L"ps_6_0", dxcUtils, dxcCompiler, includeHandler);
@@ -554,6 +407,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	psoDesc.PS = { pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize() };
 	psoDesc.BlendState = blendDesc;
 	psoDesc.RasterizerState = rasterizerDesc;
+	psoDesc.DepthStencilState = depthStencilDesc;
+	psoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	psoDesc.NumRenderTargets = 1;
 	psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -561,16 +416,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
 
 	ID3D12PipelineState* pipelineState = nullptr;
-	hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
-	assert(SUCCEEDED(hr));
+	device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
 
-	// 頂点リソース作成
-	D3D12_HEAP_PROPERTIES uploadHeapProperties{};
-	uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
-
+	D3D12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
 	D3D12_RESOURCE_DESC vertexResourceDesc{};
 	vertexResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	vertexResourceDesc.Width = sizeof(Vertex) * 3;
+	vertexResourceDesc.Width = sizeof(Vertex) * 6;
 	vertexResourceDesc.Height = 1;
 	vertexResourceDesc.DepthOrArraySize = 1;
 	vertexResourceDesc.MipLevels = 1;
@@ -578,20 +429,23 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	vertexResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
 	ID3D12Resource* vertexResource = nullptr;
-	hr = device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResource));
-	assert(SUCCEEDED(hr));
+	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResource));
 
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
 	vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
-	vertexBufferView.SizeInBytes = sizeof(Vertex) * 3;
+	vertexBufferView.SizeInBytes = sizeof(Vertex) * 6;
 	vertexBufferView.StrideInBytes = sizeof(Vertex);
 
-	// 頂点データの割り当て
 	Vertex* vertexData = nullptr;
 	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-	vertexData[0].position = { -0.5f, -0.5f, 0.0f, 1.0f }; vertexData[0].texcoord = { 0.0f, 1.0f }; // 左下
-	vertexData[1].position = { 0.0f,  0.5f, 0.0f, 1.0f }; vertexData[1].texcoord = { 0.5f, 0.0f }; // 上
-	vertexData[2].position = { 0.5f, -0.5f, 0.0f, 1.0f }; vertexData[2].texcoord = { 1.0f, 1.0f }; // 右下
+	// 1枚目の三角形
+	vertexData[0].position = { -0.5f, -0.5f, 0.0f, 1.0f }; vertexData[0].texcoord = { 0.0f, 1.0f };
+	vertexData[1].position = { 0.0f,  0.5f, 0.0f, 1.0f }; vertexData[1].texcoord = { 0.5f, 0.0f };
+	vertexData[2].position = { 0.5f, -0.5f, 0.0f, 1.0f }; vertexData[2].texcoord = { 1.0f, 1.0f };
+	// 2枚目の三角形（貫通データ）
+	vertexData[3].position = { -0.5f, -0.5f,  0.5f, 1.0f }; vertexData[3].texcoord = { 0.0f, 1.0f };
+	vertexData[4].position = { 0.0f,  0.0f,  0.0f, 1.0f }; vertexData[4].texcoord = { 0.5f, 0.0f };
+	vertexData[5].position = { 0.5f, -0.5f, -0.5f, 1.0f }; vertexData[5].texcoord = { 1.0f, 1.0f };
 	vertexResource->Unmap(0, nullptr);
 
 	// マテリアルバッファ作成
@@ -605,45 +459,54 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	materialResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
 	ID3D12Resource* materialResource = nullptr;
-	hr = device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResource));
-	assert(SUCCEEDED(hr));
+	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResource));
 
 	Material* materialData = nullptr;
 	materialResource->Map(0, nullptr, reinterpret_cast<void**>(&materialData));
-	materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f }; // 白色に設定
+	materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f };
 	materialResource->Unmap(0, nullptr);
 
-	// Resources/uvChecker.png をロード
+	// ★変形行列バッファの作成（b1用）
+	D3D12_RESOURCE_DESC wvpResourceDesc{};
+	wvpResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	wvpResourceDesc.Width = (sizeof(TransformationMatrix) + 255) & ~255;
+	wvpResourceDesc.Height = 1;
+	wvpResourceDesc.DepthOrArraySize = 1;
+	wvpResourceDesc.MipLevels = 1;
+	wvpResourceDesc.SampleDesc.Count = 1;
+	wvpResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+	ID3D12Resource* wvpResource = nullptr;
+	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&wvpResource));
+
+	TransformationMatrix* wvpData = nullptr;
+	wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
+	// 単位行列で初期化（メインループで毎フレーム更新するため、ここではUnmapしません）
+	for (int i = 0; i < 4; ++i)
+	{
+		for (int j = 0; j < 4; ++j)
+		{
+			wvpData->wvp[i][j] = (i == j) ? 1.0f : 0.0f;
+		}
+	}
+
+	// テクスチャロード
 	std::vector<uint8_t> textureData;
 	D3D12_RESOURCE_DESC textureDesc{};
 	LoadTextureFile(L"Resources/uvChecker.png", textureData, textureDesc);
 
-	// テクスチャ用カスタムヒープ
 	D3D12_HEAP_PROPERTIES textureHeapProps{};
 	textureHeapProps.Type = D3D12_HEAP_TYPE_CUSTOM;
 	textureHeapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
 	textureHeapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
 
 	ID3D12Resource* textureResource = nullptr;
-	hr = device->CreateCommittedResource(
-		&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
-		D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource)
-	);
-	assert(SUCCEEDED(hr));
+	device->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource));
+	textureResource->WriteToSubresource(0, nullptr, textureData.data(), static_cast<UINT>(textureDesc.Width * 4), static_cast<UINT>(textureData.size()));
 
-	// データを書き込み
-	hr = textureResource->WriteToSubresource(
-		0, nullptr, textureData.data(),
-		static_cast<UINT>(textureDesc.Width * 4),
-		static_cast<UINT>(textureData.size())
-	);
-	assert(SUCCEEDED(hr));
-
-	// SRVの構築
 	UINT descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU = srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	textureSrvHandleCPU.ptr += descriptorSize;
-
 	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU = srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 	textureSrvHandleGPU.ptr += descriptorSize;
 
@@ -652,10 +515,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	srvDesc.Texture2D.MipLevels = 1;
-
 	device->CreateShaderResourceView(textureResource, &srvDesc, textureSrvHandleCPU);
 
-	// ビューポート、シザー
 	D3D12_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 1.0f };
 	D3D12_RECT scissorRect{ 0, 0, kClientWidth, kClientHeight };
 
@@ -664,12 +525,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	ImGui::CreateContext();
 	ImGui::StyleColorsDark();
 	ImGui_ImplWin32_Init(hwnd);
-	ImGui_ImplDX12_Init(
-		device, 2, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, srvDescriptorHeap,
-		srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-		srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart()
-	);
+	ImGui_ImplDX12_Init(device, 2, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, srvDescriptorHeap, srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 #endif
+
+	// ★回転角度を保持する変数
+	float angle = 0.0f;
 
 	MSG msg{};
 	while (msg.message != WM_QUIT)
@@ -685,9 +545,24 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
-			ImGui::ShowDemoWindow();
 			ImGui::Render();
 #endif
+			// ★毎フレームのY軸回転行列の計算とバッファ更新
+			angle += 0.02f; // 回転速度の調整
+			float sinA = std::sin(angle);
+			float cosA = std::cos(angle);
+
+			TransformationMatrix rotateMatrix = {};
+			// 単位行列化
+			for (int i = 0; i < 4; ++i) rotateMatrix.wvp[i][i] = 1.0f;
+			// Y軸回転成分の設定
+			rotateMatrix.wvp[0][0] = cosA;
+			rotateMatrix.wvp[0][2] = -sinA;
+			rotateMatrix.wvp[2][0] = sinA;
+			rotateMatrix.wvp[2][2] = cosA;
+
+			// GPU上のデータへコピー
+			std::memcpy(wvpData, &rotateMatrix, sizeof(TransformationMatrix));
 
 			commandAllocator->Reset();
 			commandList->Reset(commandAllocator, nullptr);
@@ -705,10 +580,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
 			commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
 
-			commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], false, nullptr);
+			D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+			commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], false, &dsvHandle);
 
 			float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f };
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
+			commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
 			commandList->RSSetViewports(1, &viewport);
 			commandList->RSSetScissorRects(1, &scissorRect);
@@ -717,24 +594,21 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-			// 各種リソースバインド
+			// 各定数バッファ・記述子テーブルのセット
 			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
+			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress()); // ★追加した行列バッファをセット
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 
-			// 描画
-			commandList->DrawInstanced(3, 1, 0, 0);
+			commandList->DrawInstanced(6, 1, 0, 0);
 
 #ifdef USE_IMGUI
 			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
 #endif
-
 			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
 			commandList->ResourceBarrier(1, &barrier);
 
-			hr = commandList->Close();
-			assert(SUCCEEDED(hr));
-
+			commandList->Close();
 			ID3D12CommandList* commandLists[] = { commandList };
 			commandQueue->ExecuteCommandLists(1, commandLists);
 
@@ -756,6 +630,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	ImGui::DestroyContext();
 #endif
 
+	// 後始末（新しく作ったリソースも漏れなく解放）
+	if (wvpResource)
+	{
+		wvpResource->Unmap(0, nullptr);
+		wvpResource->Release();
+	}
+
+	depthStencilResource->Release();
+	dsvDescriptorHeap->Release();
 	textureResource->Release();
 	materialResource->Release();
 	vertexResource->Release();
@@ -764,12 +647,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	pixelShaderBlob->Release();
 	rootSignature->Release();
 	signatureBlob->Release();
-	if (errorBlob) { errorBlob->Release(); }
-
+	if (errorBlob) errorBlob->Release();
 	includeHandler->Release();
 	dxcCompiler->Release();
 	dxcUtils->Release();
-
 	CloseHandle(fenceEvent);
 	fence->Release();
 	srvDescriptorHeap->Release();
@@ -785,9 +666,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	dxgiFactory->Release();
 
 #ifdef _DEBUG
-	if (debugController != nullptr) { debugController->Release(); }
+	if (debugController != nullptr) debugController->Release();
 #endif
-
 	CloseWindow(hwnd);
 
 #ifdef _DEBUG
@@ -798,7 +678,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		debug->Release();
 	}
 #endif
-
 	CoUninitialize();
 	return 0;
 }
