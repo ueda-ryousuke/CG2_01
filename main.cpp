@@ -74,8 +74,7 @@ struct Transform
 	float translate[3];
 };
 
-// --- [エラー解消] 行列計算用のヘルパー関数群（定義順序を最適化） ---
-
+// --- 行列計算用のヘルパー関数群 ---
 Matrix4x4 MakeIdentity4x4()
 {
 	Matrix4x4 result = {};
@@ -83,7 +82,34 @@ Matrix4x4 MakeIdentity4x4()
 	return result;
 }
 
-// 行列の掛け算（MakeAffineMatrix より先に定義する必要があります）
+Matrix4x4 MakeOrthographicMatrix(float left, float top, float right, float bottom, float nearClip, float farClip)
+{
+	Matrix4x4 result = {};
+	result.m[0][0] = 2.0f / (right - left);
+	result.m[1][1] = 2.0f / (top - bottom);
+	result.m[2][2] = 1.0f / (farClip - nearClip);
+	result.m[3][0] = (left + right) / (left - right);
+	result.m[3][1] = (top + bottom) / (bottom - top);
+	result.m[3][2] = nearClip / (nearClip - farClip);
+	result.m[3][3] = 1.0f;
+	return result;
+}
+
+// アフィン変換行列作成関数（警告 C4100 対策済み）
+Matrix4x4 MakeAffineMatrix(const float scale[3], const float rotate[3], const float translate[3])
+{
+	(void)rotate;
+
+	Matrix4x4 result = MakeIdentity4x4();
+	result.m[0][0] = scale[0];
+	result.m[1][1] = scale[1];
+	result.m[2][2] = scale[2];
+	result.m[3][0] = translate[0];
+	result.m[3][1] = translate[1];
+	result.m[3][2] = translate[2];
+	return result;
+}
+
 Matrix4x4 Multiply(const Matrix4x4& m1, const Matrix4x4& m2)
 {
 	Matrix4x4 result = {};
@@ -100,79 +126,19 @@ Matrix4x4 Multiply(const Matrix4x4& m1, const Matrix4x4& m2)
 	return result;
 }
 
-// 透視投影（遠近感のある3D表示用）の行列生成関数
-Matrix4x4 MakePerspectiveFovMatrix(float fovY, float aspect, float nearClip, float farClip)
+// --- ★【関数化】DescriptorHandle取得関数を追加 ---
+D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(ID3D12DescriptorHeap* descriptorHeap, uint32_t descriptorSize, uint32_t index)
 {
-	Matrix4x4 result = {};
-	float cot = 1.0f / std::tan(fovY / 2.0f);
-	result.m[0][0] = cot / aspect;
-	result.m[1][1] = cot;
-	result.m[2][2] = farClip / (farClip - nearClip);
-	result.m[2][3] = 1.0f;
-	result.m[3][2] = (-nearClip * farClip) / (farClip - nearClip);
-	return result;
+	D3D12_CPU_DESCRIPTOR_HANDLE handleCPU = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	handleCPU.ptr += (descriptorSize * index);
+	return handleCPU;
 }
 
-// 平行投影の行列生成関数
-Matrix4x4 MakeOrthographicMatrix(float left, float top, float right, float bottom, float nearClip, float farClip)
+D3D12_GPU_DESCRIPTOR_HANDLE GetGPUDescriptorHandle(ID3D12DescriptorHeap* descriptorHeap, uint32_t descriptorSize, uint32_t index)
 {
-	Matrix4x4 result = {};
-	result.m[0][0] = 2.0f / (right - left);
-	result.m[1][1] = 2.0f / (top - bottom);
-	result.m[2][2] = 1.0f / (farClip - nearClip);
-	result.m[3][0] = (left + right) / (left - right);
-	result.m[3][1] = (top + bottom) / (bottom - top);
-	result.m[3][2] = nearClip / (nearClip - farClip);
-	result.m[3][3] = 1.0f;
-	return result;
-}
-
-// 3D用のアフィン変換行列作成関数
-Matrix4x4 MakeAffineMatrix(const float scale[3], const float rotate[3], const float translate[3])
-{
-	// 回転行列の計算 (X->Y->Z)
-	Matrix4x4 rx = MakeIdentity4x4();
-	rx.m[1][1] = std::cos(rotate[0]); rx.m[1][2] = std::sin(rotate[0]);
-	rx.m[2][1] = -std::sin(rotate[0]); rx.m[2][2] = std::cos(rotate[0]);
-
-	Matrix4x4 ry = MakeIdentity4x4();
-	ry.m[0][0] = std::cos(rotate[1]); ry.m[0][2] = -std::sin(rotate[1]);
-	ry.m[2][0] = std::sin(rotate[1]); ry.m[2][2] = std::cos(rotate[1]);
-
-	Matrix4x4 rz = MakeIdentity4x4();
-	rz.m[0][0] = std::cos(rotate[2]); rz.m[0][1] = std::sin(rotate[2]);
-	rz.m[1][0] = -std::sin(rotate[2]); rz.m[1][1] = std::cos(rotate[2]);
-
-	// 拡大縮小行列
-	Matrix4x4 s = MakeIdentity4x4();
-	s.m[0][0] = scale[0]; s.m[1][1] = scale[1]; s.m[2][2] = scale[2];
-
-	// 平行移動行列
-	Matrix4x4 t = MakeIdentity4x4();
-	t.m[3][0] = translate[0]; t.m[3][1] = translate[1]; t.m[3][2] = translate[2];
-
-	// S * R * T
-	Matrix4x4 r = Multiply(rx, Multiply(ry, rz));
-	return Multiply(s, Multiply(r, t));
-}
-
-// 逆行列計算（カメラのビュー行列用）
-Matrix4x4 Inverse(const Matrix4x4& m)
-{
-	Matrix4x4 result = MakeIdentity4x4();
-	// 転置による回転の反転
-	for (int i = 0; i < 3; ++i)
-	{
-		for (int j = 0; j < 3; ++j)
-		{
-			result.m[i][j] = m.m[j][i];
-		}
-	}
-	// 平行移動の反転
-	result.m[3][0] = -(m.m[3][0] * result.m[0][0] + m.m[3][1] * result.m[1][0] + m.m[3][2] * result.m[2][0]);
-	result.m[3][1] = -(m.m[3][0] * result.m[0][1] + m.m[3][1] * result.m[1][1] + m.m[3][2] * result.m[2][1]);
-	result.m[3][2] = -(m.m[3][0] * result.m[0][2] + m.m[3][1] * result.m[1][2] + m.m[3][2] * result.m[2][2]);
-	return result;
+	D3D12_GPU_DESCRIPTOR_HANDLE handleGPU = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+	handleGPU.ptr += (descriptorSize * index);
+	return handleGPU;
 }
 
 // WindowProc
@@ -275,10 +241,13 @@ void LoadTextureFile(const std::wstring& filePath, std::vector<uint8_t>& outData
 
 	IWICBitmapDecoder* decoder = nullptr;
 	hr = wicFactory->CreateDecoderFromFilename(filePath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
+
 	if (FAILED(hr))
 	{
-		Log(L"❌ 画像ファイルが開けません: " + filePath + L"\n");
-		assert(SUCCEEDED(hr));
+		std::wstring errorMsg = L"❌ 画像ファイルが開けません。ファイルが存在するか、パスを確認してください:\n" + filePath;
+		Log(errorMsg + L"\n");
+		MessageBoxW(nullptr, errorMsg.c_str(), L"ファイル読み込みエラー", MB_OK | MB_ICONERROR);
+		exit(-1);
 	}
 
 	IWICBitmapFrameDecode* frame = nullptr;
@@ -356,7 +325,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);
 
 	HWND hwnd = CreateWindow(
-		wc.lpszClassName, L"CG2 - Sphere Drawing", WS_OVERLAPPEDWINDOW,
+		wc.lpszClassName, L"CG2 - Sprite Drawing", WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top,
 		nullptr, nullptr, wc.hInstance, nullptr
 	);
@@ -497,7 +466,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	inputElementDescs[0].Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 	inputElementDescs[0].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
 	inputElementDescs[1].SemanticName = "TEXCOORD";
-	inputElementDescs[1].SemanticIndex = 0;
 	inputElementDescs[1].Format = DXGI_FORMAT_R32G32_FLOAT;
 	inputElementDescs[1].AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
 
@@ -536,13 +504,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	D3D12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
 
-	// --- 3D球体用のメッシュ生成とリソース設定 ---
-	const uint32_t kSubdivision = 16;
-	const uint32_t kNumSphereVertices = kSubdivision * kSubdivision * 6;
-
+	// --- 3D三角形用のリソース設定 ---
 	D3D12_RESOURCE_DESC vertexResourceDesc{};
 	vertexResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	vertexResourceDesc.Width = sizeof(Vertex) * kNumSphereVertices;
+	vertexResourceDesc.Width = sizeof(Vertex) * 6;
 	vertexResourceDesc.Height = 1;
 	vertexResourceDesc.DepthOrArraySize = 1;
 	vertexResourceDesc.MipLevels = 1;
@@ -554,63 +519,22 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
 	vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
-	vertexBufferView.SizeInBytes = sizeof(Vertex) * kNumSphereVertices;
+	vertexBufferView.SizeInBytes = sizeof(Vertex) * 6;
 	vertexBufferView.StrideInBytes = sizeof(Vertex);
 
-	// 球体の幾何データ作成
 	Vertex* vertexData = nullptr;
 	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-
-	const float pi = 3.1415926535f;
-	float kLatEvery = pi / float(kSubdivision);
-	float kLonEvery = 2.0f * pi / float(kSubdivision);
-
-	for (uint32_t latIndex = 0; latIndex < kSubdivision; ++latIndex)
-	{
-		float lat = -pi / 2.0f + kLatEvery * latIndex;
-		for (uint32_t lonIndex = 0; lonIndex < kSubdivision; ++lonIndex)
-		{
-			float lon = lonIndex * kLonEvery;
-
-			uint32_t startIndex = (latIndex * kSubdivision + lonIndex) * 6;
-
-			float ax = std::cos(lat) * std::cos(lon);
-			float ay = std::sin(lat);
-			float az = std::cos(lat) * std::sin(lon);
-
-			float bx = std::cos(lat + kLatEvery) * std::cos(lon);
-			float by = std::sin(lat + kLatEvery);
-			float bz = std::cos(lat + kLatEvery) * std::sin(lon);
-
-			float cx = std::cos(lat) * std::cos(lon + kLonEvery);
-			float cy = std::sin(lat);
-			float cz = std::cos(lat) * std::sin(lon + kLonEvery);
-
-			float dx = std::cos(lat + kLatEvery) * std::cos(lon + kLonEvery);
-			float dy = std::sin(lat + kLatEvery);
-			float dz = std::cos(lat + kLatEvery) * std::sin(lon + kLonEvery);
-
-			float u1 = float(lonIndex) / float(kSubdivision);
-			float u2 = float(lonIndex + 1) / float(kSubdivision);
-			float v1 = 1.0f - float(latIndex) / float(kSubdivision);
-			float v2 = 1.0f - float(latIndex + 1) / float(kSubdivision);
-
-			vertexData[startIndex + 0] = { {ax, ay, az, 1.0f}, {u1, v1} };
-			vertexData[startIndex + 1] = { {bx, by, bz, 1.0f}, {u1, v2} };
-			vertexData[startIndex + 2] = { {cx, cy, cz, 1.0f}, {u2, v1} };
-			vertexData[startIndex + 3] = { {cx, cy, cz, 1.0f}, {u2, v1} };
-			vertexData[startIndex + 4] = { {bx, by, bz, 1.0f}, {u1, v2} };
-			vertexData[startIndex + 5] = { {dx, dy, dz, 1.0f}, {u2, v2} };
-		}
-	}
+	vertexData[0].position = { -0.5f, -0.5f, 0.0f, 1.0f }; vertexData[0].texcoord = { 0.0f, 1.0f };
+	vertexData[1].position = { 0.0f,  0.5f, 0.0f, 1.0f }; vertexData[1].texcoord = { 0.5f, 0.0f };
+	vertexData[2].position = { 0.5f, -0.5f, 0.0f, 1.0f }; vertexData[2].texcoord = { 1.0f, 1.0f };
+	vertexData[3].position = { -0.5f, -0.5f,  0.5f, 1.0f }; vertexData[3].texcoord = { 0.0f, 1.0f };
+	vertexData[4].position = { 0.0f,  0.0f,  0.0f, 1.0f }; vertexData[4].texcoord = { 0.5f, 0.0f };
+	vertexData[5].position = { 0.5f, -0.5f, -0.5f, 1.0f }; vertexData[5].texcoord = { 1.0f, 1.0f };
 	vertexResource->Unmap(0, nullptr);
 
-	// 2Dスプライト用のリソース作成
-	D3D12_RESOURCE_DESC vertexResourceDescSprite = vertexResourceDesc;
-	vertexResourceDescSprite.Width = sizeof(Vertex) * 6;
-
+	// --- 2Dスプライト用のリソース作成 ---
 	ID3D12Resource* vertexResourceSprite = nullptr;
-	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescSprite, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSprite));
+	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSprite));
 
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferViewSprite{};
 	vertexBufferViewSprite.BufferLocation = vertexResourceSprite->GetGPUVirtualAddress();
@@ -661,11 +585,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
 	wvpData->wvp = MakeIdentity4x4();
 
-	// トランスフォーム設定
-	Transform transformSphere{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
-	Transform cameraTransform{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -4.0f} };
-
-	// 2Dスプライト用の変形行列バッファ作成
+	// スプライト用の変形行列バッファ作成
 	ID3D12Resource* transformationMatrixResourceSprite = nullptr;
 	device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&transformationMatrixResourceSprite));
 
@@ -675,7 +595,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 	Transform transformSprite{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
 
-	// テクスチャロード
+	// --- ★【変更】DescriptorSizeを取得 ---
+	const uint32_t descriptorSizeSRV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+	// 1枚目のテクスチャロード
 	std::vector<uint8_t> textureData;
 	D3D12_RESOURCE_DESC textureDesc{};
 	LoadTextureFile(L"Resources/uvChecker.png", textureData, textureDesc);
@@ -686,14 +609,19 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	textureHeapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
 
 	ID3D12Resource* textureResource = nullptr;
-	device->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource));
+	device->CreateCommittedResource(
+		&textureHeapProps,
+		D3D12_HEAP_FLAG_NONE,
+		&textureDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&textureResource)
+	);
 	textureResource->WriteToSubresource(0, nullptr, textureData.data(), static_cast<UINT>(textureDesc.Width * 4), static_cast<UINT>(textureData.size()));
 
-	UINT descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-	D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU = srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	textureSrvHandleCPU.ptr += descriptorSize;
-	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU = srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	textureSrvHandleGPU.ptr += descriptorSize;
+	// --- ★【変更】index=1 の位置に 1枚目のSRV (uvChecker) ハンドル作成 ---
+	D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU = GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 1);
+	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU = GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 1);
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 	srvDesc.Format = textureDesc.Format;
@@ -701,6 +629,35 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	srvDesc.Texture2D.MipLevels = 1;
 	device->CreateShaderResourceView(textureResource, &srvDesc, textureSrvHandleCPU);
+
+
+	// --- ★【追加】2枚目のテクスチャロード (monsterBall.png) と生成 ---
+	std::vector<uint8_t> textureData2;
+	D3D12_RESOURCE_DESC textureDesc2{};
+	LoadTextureFile(L"Resources/monsterBall.png", textureData2, textureDesc2);
+
+	ID3D12Resource* textureResource2 = nullptr;
+	device->CreateCommittedResource(
+		&textureHeapProps,
+		D3D12_HEAP_FLAG_NONE,
+		&textureDesc2,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&textureResource2)
+	);
+	textureResource2->WriteToSubresource(0, nullptr, textureData2.data(), static_cast<UINT>(textureDesc2.Width * 4), static_cast<UINT>(textureData2.size()));
+
+	// index=2 の位置に 2枚目のSRV (monsterBall)
+	D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2 = GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
+	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2 = GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc2{};
+	srvDesc2.Format = textureDesc2.Format;
+	srvDesc2.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc2.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc2.Texture2D.MipLevels = 1;
+	device->CreateShaderResourceView(textureResource2, &srvDesc2, textureSrvHandleCPU2);
+
 
 	D3D12_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 1.0f };
 	D3D12_RECT scissorRect{ 0, 0, kClientWidth, kClientHeight };
@@ -712,6 +669,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	ImGui_ImplWin32_Init(hwnd);
 	ImGui_ImplDX12_Init(device, 2, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, srvDescriptorHeap, srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 #endif
+
+	float angle = 0.0f;
+	bool useMonsterBall = true; // ★切り替え用フラグ
 
 	MSG msg{};
 	while (msg.message != WM_QUIT)
@@ -729,39 +689,39 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			ImGui::NewFrame();
 
 			ImGui::Begin("Settings");
+
+			// ★切り替え用チェックボックスを追加
+			ImGui::Checkbox("useMonsterBall", &useMonsterBall);
+
 			if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen))
 			{
 				ImGui::ColorEdit4("color", &materialData->color.x);
 			}
-			if (ImGui::CollapsingHeader("Sphere 3D Control", ImGuiTreeNodeFlags_DefaultOpen))
-			{
-				ImGui::SliderFloat3("Sphere Scale", transformSphere.scale, 0.1f, 5.0f);
-				ImGui::SliderFloat3("Sphere Rotate", transformSphere.rotate, -3.14f, 3.14f);
-				ImGui::SliderFloat3("Sphere Position", transformSphere.translate, -5.0f, 5.0f);
-				ImGui::SliderFloat("Camera Z Distance", &cameraTransform.translate[2], -10.0f, -1.0f);
-			}
+
 			if (ImGui::CollapsingHeader("TransformSprite", ImGuiTreeNodeFlags_DefaultOpen))
 			{
 				ImGui::SliderFloat2("scale", transformSprite.scale, 0.1f, 5.0f);
 				ImGui::SliderFloat2("translate", transformSprite.translate, -200.0f, 1000.0f);
 			}
+
 			ImGui::End();
 			ImGui::Render();
 #endif
 
-			// 球の回転
-			transformSphere.rotate[1] += 0.01f;
+			// 3D回転計算
+			angle += 0.02f;
+			float sinA = std::sin(angle);
+			float cosA = std::cos(angle);
 
-			Matrix4x4 worldMatrixSphere = MakeAffineMatrix(transformSphere.scale, transformSphere.rotate, transformSphere.translate);
-			Matrix4x4 cameraMatrix = MakeAffineMatrix(cameraTransform.scale, cameraTransform.rotate, cameraTransform.translate);
-			Matrix4x4 viewMatrixSphere = Inverse(cameraMatrix);
-			Matrix4x4 projectionMatrixSphere = MakePerspectiveFovMatrix(0.45f, float(kClientWidth) / float(kClientHeight), 0.1f, 100.0f);
+			Matrix4x4 rotateMatrix = MakeIdentity4x4();
+			rotateMatrix.m[0][0] = cosA;
+			rotateMatrix.m[0][2] = -sinA;
+			rotateMatrix.m[2][0] = sinA;
+			rotateMatrix.m[2][2] = cosA;
 
-			Matrix4x4 worldViewMatrixSphere = Multiply(worldMatrixSphere, viewMatrixSphere);
-			Matrix4x4 worldViewProjectionMatrixSphere = Multiply(worldViewMatrixSphere, projectionMatrixSphere);
+			wvpData->wvp = rotateMatrix;
 
-			wvpData->wvp = worldViewProjectionMatrixSphere;
-
+			// スプライト行列計算
 			Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
 			Matrix4x4 viewMatrixSprite = MakeIdentity4x4();
 			Matrix4x4 projectionMatrixSprite = MakeOrthographicMatrix(0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 100.0f);
@@ -801,14 +761,17 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 
-			// 1. 3D球体の描画
+			// --- ★【変更】1. 3Dオブジェクト（球）の描画：チェックボックスの三項演算子で切り替え ---
+			commandList->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU);
+
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
 			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
-			commandList->DrawInstanced(kNumSphereVertices, 1, 0, 0);
+			commandList->DrawInstanced(6, 1, 0, 0);
 
-			// 2. 2Dスプライトの描画
+			// --- ★【変更】2. 2Dスプライトの描画：常に uvChecker に固定（直前のステートを引き継がないバグ対策） ---
+			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
+
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
 			commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
 			commandList->DrawInstanced(6, 1, 0, 0);
@@ -865,6 +828,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 	depthStencilResource->Release();
 	dsvDescriptorHeap->Release();
 	textureResource->Release();
+	if (textureResource2) textureResource2->Release(); // ★2枚目のテクスチャ解放
 	vertexResource->Release();
 	pipelineState->Release();
 	vertexShaderBlob->Release();
