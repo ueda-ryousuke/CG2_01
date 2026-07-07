@@ -1,18 +1,11 @@
-struct VertexShaderOutput
-{
-    float4 position : SV_POSITION;
-    float2 texcoord : TEXCOORD0;
-};
-
-struct Material
-{
-    float4 color;
-};
+#include "Object3d.hlsli"
 
 Texture2D<float4> gTexture : register(t0);
 SamplerState gSampler : register(s0);
 
 ConstantBuffer<Material> gMaterial : register(b0);
+
+ConstantBuffer<DirectionalLight> gDirectionalLight : register(b2);
 
 struct PixelShaderOutput
 {
@@ -22,7 +15,19 @@ struct PixelShaderOutput
 PixelShaderOutput main(VertexShaderOutput input)
 {
     PixelShaderOutput output;
+    
     float4 textureColor = gTexture.Sample(gSampler, input.texcoord).bgra;
-    output.color = gMaterial.color * textureColor;
+    
+    if (gMaterial.enableLighting != 0)
+    {
+        float cos = saturate(dot(normalize(input.normal), -gDirectionalLight.direction));
+        
+        output.color = gMaterial.color * textureColor * gDirectionalLight.color * cos * gDirectionalLight.intensity;
+    }
+    else
+    {
+        output.color = gMaterial.color * textureColor;
+    }
+    
     return output;
 }
