@@ -22,7 +22,7 @@ struct PixelShaderOutput
 PixelShaderOutput main(VertexShaderOutput input)
 {
     PixelShaderOutput output;
-    float4 textureColor = gTexture.Sample(gSampler, input.texcoord);
+    float4 textureColor = gTexture.Sample(gSampler, input.texcoord).bgra;
     output.color = gMaterial.color * textureColor;
     return output;
 }
