@@ -1,11 +1,16 @@
 #include "Object3d.hlsli"
 
+struct DirectionalLight
+{
+    float4 color;
+    float3 direction;
+    float intensity;
+};
+
 Texture2D<float4> gTexture : register(t0);
 SamplerState gSampler : register(s0);
-
 ConstantBuffer<Material> gMaterial : register(b0);
-
-ConstantBuffer<DirectionalLight> gDirectionalLight : register(b2);
+ConstantBuffer<DirectionalLight> gDirectionalLight : register(b1);
 
 struct PixelShaderOutput
 {
@@ -15,15 +20,18 @@ struct PixelShaderOutput
 PixelShaderOutput main(VertexShaderOutput input)
 {
     PixelShaderOutput output;
-    float4 textureColor = gTexture.Sample(gSampler, input.texcoord).bgra;
+    
+    float4 transformedUV = mul(float4(input.texcoord, 0.0f, 1.0f), gMaterial.uvTransform);
+    
+    float4 textureColor = gTexture.Sample(gSampler, transformedUV.xy).bgra;
     
     if (gMaterial.enableLighting != 0)
     {
-        float NdotL = dot(normalize(input.normal), -gDirectionalLight.direction);
+        float NdotL = dot(normalize(input.normal), -normalize(gDirectionalLight.direction));
         
-        float cos = pow(NdotL * 0.5f + 0.5f, 2.0f);
+        float halfLambert = pow(NdotL * 0.5f + 0.5f, 2.0f);
         
-        output.color = gMaterial.color * textureColor * gDirectionalLight.color * cos * gDirectionalLight.intensity;
+        output.color = gMaterial.color * textureColor * gDirectionalLight.color * halfLambert * gDirectionalLight.intensity;
     }
     else
     {
