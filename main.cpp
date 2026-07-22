@@ -8,6 +8,8 @@
 #include <vector>
 #include <wincodec.h>
 #include <cmath>
+#include <fstream>
+#include <sstream>
 
 // DXCコンパイルに必要なヘッダーとライブラリ
 #include <dxcapi.h>
@@ -39,15 +41,27 @@ struct Vertex
 	Vector3 normal;
 };
 
+// MaterialData構造体
+struct MaterialData
+{
+	std::string textureFilePath;
+};
+
+// ModelData構造体
+struct ModelData
+{
+	std::vector<Vertex> vertices;
+	MaterialData material;
+};
+
 struct Matrix4x4 { float m[4][4]; };
 
-// 💡スライド「Alignmentを考慮して書き換え」に対応したMaterial構造体
 struct Material
 {
 	Vector4 color;
 	int32_t enableLighting;
-	float padding[3];          // 16バイトアライメント用のパディング (12バイト)
-	Matrix4x4 uvTransform;     // 💡UVTransform用の4x4行列
+	float padding[3];
+	Matrix4x4 uvTransform;
 };
 
 struct TransformationMatrix
@@ -55,6 +69,7 @@ struct TransformationMatrix
 	Matrix4x4 wvp;
 	Matrix4x4 world;
 };
+
 struct Transform
 {
 	float scale[3];
@@ -62,7 +77,6 @@ struct Transform
 	float translate[3];
 };
 
-// 平行光源用の構造体
 struct DirectionalLight
 {
 	Vector4 color;
@@ -70,7 +84,7 @@ struct DirectionalLight
 	float intensity;
 };
 
-// --- 行列計算用のヘルパー関数群 ---
+// --- 行列計算・ヘルパー関数群 ---
 Matrix4x4 MakeIdentity4x4()
 {
 	Matrix4x4 result = {};
@@ -153,20 +167,13 @@ Matrix4x4 MakeAffineMatrix(const float scale[3], const float rotate[3], const fl
 	Matrix4x4 mTranslate = MakeTranslateMatrix(translate);
 	return Multiply(Multiply(mScale, mRotate), mTranslate);
 }
-
-// 💡UVの2Dアフィン変換行列生成用のヘルパー (S -> R_z -> T の積)
 Matrix4x4 MakeUVTransformMatrix(const float scale[3], float rotateZ, const float translate[3])
 {
 	Matrix4x4 mScale = MakeIdentity4x4();
-	mScale.m[0][0] = scale[0];
-	mScale.m[1][1] = scale[1];
-
+	mScale.m[0][0] = scale[0]; mScale.m[1][1] = scale[1];
 	Matrix4x4 mRotZ = MakeRotateZMatrix(rotateZ);
-
 	Matrix4x4 mTranslate = MakeIdentity4x4();
-	mTranslate.m[3][0] = translate[0];
-	mTranslate.m[3][1] = translate[1];
-
+	mTranslate.m[3][0] = translate[0]; mTranslate.m[3][1] = translate[1];
 	return Multiply(Multiply(mScale, mRotZ), mTranslate);
 }
 
@@ -240,6 +247,113 @@ ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t 
 	ID3D12Resource* resource = nullptr;
 	device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClearValue, IID_PPV_ARGS(&resource));
 	return resource;
+}
+
+// mtlファイルを解析する関数
+MaterialData LoadMaterialTemplateFile(const std::string& directoryPath, const std::string& filename)
+{
+	MaterialData materialData;
+	std::string line;
+	std::ifstream file(directoryPath + "/" + filename);
+	assert(file.is_open());
+
+	while (std::getline(file, line))
+	{
+		std::string identifier;
+		std::istringstream s(line);
+		s >> identifier;
+
+		if (identifier == "map_Kd")
+		{
+			std::string textureFilename;
+			s >> textureFilename;
+			materialData.textureFilePath = directoryPath + "/" + textureFilename;
+		}
+	}
+	return materialData;
+}
+
+// OBJファイル解析関数
+ModelData LoadObjFile(const std::string& directoryPath, const std::string& filename)
+{
+	ModelData modelData;
+	std::vector<Vector4> positions;
+	std::vector<Vector3> normals;
+	std::vector<Vector2> texcoords;
+	std::string line;
+
+	std::ifstream file(directoryPath + "/" + filename);
+	assert(file.is_open());
+
+	while (std::getline(file, line))
+	{
+		std::string identifier;
+		std::istringstream s(line);
+		s >> identifier;
+
+		if (identifier == "v")
+		{
+			Vector4 position;
+			s >> position.x >> position.y >> position.z;
+			position.w = 1.0f;
+			position.x *= -1.0f; // 右手系->左手系変換
+			positions.push_back(position);
+		}
+		else if (identifier == "vt")
+		{
+			Vector2 texcoord;
+			s >> texcoord.u >> texcoord.v;
+			texcoord.v = 1.0f - texcoord.v; // V軸反転
+			texcoords.push_back(texcoord);
+		}
+		else if (identifier == "vn")
+		{
+			Vector3 normal;
+			s >> normal.x >> normal.y >> normal.z;
+			normal.x *= -1.0f; // 右手系->左手系変換
+			normals.push_back(normal);
+		}
+		else if (identifier == "f")
+		{
+			Vertex triangle[3];
+			for (int32_t faceVertex = 0; faceVertex < 3; ++faceVertex)
+			{
+				std::string vertexDefinition;
+				s >> vertexDefinition;
+
+				std::istringstream v(vertexDefinition);
+				uint32_t elementIndices[3] = { 0, 0, 0 };
+				std::string indexStr;
+				for (int i = 0; i < 3; ++i)
+				{
+					if (std::getline(v, indexStr, '/'))
+					{
+						if (!indexStr.empty())
+						{
+							elementIndices[i] = std::stoul(indexStr);
+						}
+					}
+				}
+
+				Vector4 position = positions[elementIndices[0] - 1];
+				Vector2 texcoord = (elementIndices[1] > 0) ? texcoords[elementIndices[1] - 1] : Vector2{ 0.0f, 0.0f };
+				Vector3 normal = (elementIndices[2] > 0) ? normals[elementIndices[2] - 1] : Vector3{ 0.0f, 0.0f, 1.0f };
+
+				triangle[faceVertex] = { position, texcoord, normal };
+			}
+			// 右手系->左手系変換（表裏反転のため順序を 2 -> 1 -> 0 に変更）
+			modelData.vertices.push_back(triangle[2]);
+			modelData.vertices.push_back(triangle[1]);
+			modelData.vertices.push_back(triangle[0]);
+		}
+		else if (identifier == "mtllib")
+		{
+			std::string materialFilename;
+			s >> materialFilename;
+			modelData.material = LoadMaterialTemplateFile(directoryPath, materialFilename);
+		}
+	}
+	return modelData;
 }
 
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
@@ -325,7 +439,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		ID3DBlob* signatureBlob = nullptr; ID3DBlob* errorBlob = nullptr; D3D12SerializeRootSignature(&descriptionRootSignature, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
 		ID3D12RootSignature* rootSignature = nullptr; device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
 
-		// 💡安全設計：Root Signatureが作られた直後に早期解放
 		if (signatureBlob) { signatureBlob->Release(); signatureBlob = nullptr; }
 		if (errorBlob) { errorBlob->Release(); errorBlob = nullptr; }
 
@@ -346,33 +459,21 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 		D3D12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
 
-		// ① 球体データ作成
-		const uint32_t kSubdivision = 16; const float pi = 3.1415926535f; const uint32_t kTotalVertices = kSubdivision * kSubdivision * 6;
-		D3D12_RESOURCE_DESC vertexResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * kTotalVertices, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
-		ID3D12Resource* vertexResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResource));
-		D3D12_VERTEX_BUFFER_VIEW vertexBufferView{ vertexResource->GetGPUVirtualAddress(), (UINT)(sizeof(Vertex) * kTotalVertices), sizeof(Vertex) };
-		Vertex* vertexData = nullptr; vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-		const float kLonEvery = (pi * 2.0f) / kSubdivision; const float kLatEvery = pi / kSubdivision;
-		for (uint32_t latIndex = 0; latIndex < kSubdivision; ++latIndex)
-		{
-			float lat0 = -pi / 2.0f + kLatEvery * latIndex; float lat1 = lat0 + kLatEvery;
-			for (uint32_t lonIndex = 0; lonIndex < kSubdivision; ++lonIndex)
-			{
-				float lon0 = lonIndex * kLonEvery; float lon1 = lon0 + kLonEvery; uint32_t start = (latIndex * kSubdivision + lonIndex) * 6;
-				Vector4 a = { std::cos(lat0) * std::cos(lon0), std::sin(lat0), std::cos(lat0) * std::sin(lon0), 1.0f };
-				Vector4 b = { std::cos(lat1) * std::cos(lon0), std::sin(lat1), std::cos(lat1) * std::sin(lon0), 1.0f };
-				Vector4 d = { std::cos(lat1) * std::cos(lon1), std::sin(lat1), std::cos(lat1) * std::sin(lon1), 1.0f };
-				Vector4 c = { std::cos(lat0) * std::cos(lon1), std::sin(lat0), std::cos(lat0) * std::sin(lon1), 1.0f };
-				float u0 = (float)lonIndex / kSubdivision; float u1 = (float)(lonIndex + 1) / kSubdivision;
-				float v0 = 1.0f - ((float)latIndex / kSubdivision); float v1 = 1.0f - ((float)(latIndex + 1) / kSubdivision);
+		// ① モデルデータ読み込みとリソース作成
+		ModelData modelData = LoadObjFile("resources", "plane.obj");
 
-				Vector3 nA = { a.x, a.y, a.z }; Vector3 nB = { b.x, b.y, b.z };
-				Vector3 nC = { c.x, c.y, c.z }; Vector3 nD = { d.x, d.y, d.z };
+		D3D12_RESOURCE_DESC vertexResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * modelData.vertices.size(), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
+		ID3D12Resource* vertexResource = nullptr;
+		device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResource));
 
-				vertexData[start + 0] = { a, {u0, v0}, nA }; vertexData[start + 1] = { b, {u0, v1}, nB }; vertexData[start + 2] = { c, {u1, v0}, nC };
-				vertexData[start + 3] = { c, {u1, v0}, nC }; vertexData[start + 4] = { b, {u0, v1}, nB }; vertexData[start + 5] = { d, {u1, v1}, nD };
-			}
-		}
+		D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+		vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
+		vertexBufferView.SizeInBytes = static_cast<UINT>(sizeof(Vertex) * modelData.vertices.size());
+		vertexBufferView.StrideInBytes = sizeof(Vertex);
+
+		Vertex* vertexData = nullptr;
+		vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
+		std::memcpy(vertexData, modelData.vertices.data(), sizeof(Vertex) * modelData.vertices.size());
 		vertexResource->Unmap(0, nullptr);
 
 		// ② Spriteデータ作成
@@ -382,13 +483,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		Vertex* vertexDataSprite = nullptr; vertexResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&vertexDataSprite));
 
 		Vector3 nSprite = { 0.0f, 0.0f, -1.0f };
-		vertexDataSprite[0] = { {0.0f, 360.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, nSprite }; // 左下
-		vertexDataSprite[1] = { {0.0f, 0.0f, 0.0f, 1.0f},   {0.0f, 0.0f}, nSprite }; // 左上
-		vertexDataSprite[2] = { {640.0f, 360.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, nSprite }; // 右下
-		vertexDataSprite[3] = { {640.0f, 0.0f, 0.0f, 1.0f},   {1.0f, 0.0f}, nSprite }; // 右上
+		vertexDataSprite[0] = { {0.0f, 360.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, nSprite };
+		vertexDataSprite[1] = { {0.0f, 0.0f, 0.0f, 1.0f},   {0.0f, 0.0f}, nSprite };
+		vertexDataSprite[2] = { {640.0f, 360.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, nSprite };
+		vertexDataSprite[3] = { {640.0f, 0.0f, 0.0f, 1.0f},   {1.0f, 0.0f}, nSprite };
 		vertexResourceSprite->Unmap(0, nullptr);
 
-		// ②-2 Sprite用のインデックスバッファの作成
+		// ②-2 Sprite用のインデックスバッファ作成
 		D3D12_RESOURCE_DESC indexResourceDescSprite{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(uint32_t) * 6, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 		ID3D12Resource* indexResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &indexResourceDescSprite, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexResourceSprite));
 
@@ -398,43 +499,40 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		indexBufferViewSprite.Format = DXGI_FORMAT_R32_UINT;
 
 		uint32_t* indexDataSprite = nullptr; indexResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&indexDataSprite));
-		indexDataSprite[0] = 0; indexDataSprite[1] = 1; indexDataSprite[2] = 2; // 1つ目の三角形
-		indexDataSprite[3] = 1; indexDataSprite[4] = 3; indexDataSprite[5] = 2; // 2つ目の三角形
+		indexDataSprite[0] = 0; indexDataSprite[1] = 1; indexDataSprite[2] = 2;
+		indexDataSprite[3] = 1; indexDataSprite[4] = 3; indexDataSprite[5] = 2;
 		indexResourceSprite->Unmap(0, nullptr);
 
-		// ③ マテリアルリソースの作成（サイズはアライメント対応版のMaterial構造体サイズに自動対応）
+		// ③ マテリアルリソース作成
 		D3D12_RESOURCE_DESC materialResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(Material) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 
 		ID3D12Resource* materialResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResource));
 		Material* materialData = nullptr; materialResource->Map(0, nullptr, reinterpret_cast<void**>(&materialData));
 		materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f }; materialData->enableLighting = true;
-		materialData->uvTransform = MakeIdentity4x4(); // 💡初期化
+		materialData->uvTransform = MakeIdentity4x4();
 
 		ID3D12Resource* materialResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResourceSprite));
 		Material* materialDataSprite = nullptr; materialResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&materialDataSprite));
 		materialDataSprite->color = { 1.0f, 1.0f, 1.0f, 1.0f }; materialDataSprite->enableLighting = false;
-		materialDataSprite->uvTransform = MakeIdentity4x4(); // 💡初期化
+		materialDataSprite->uvTransform = MakeIdentity4x4();
 
 		// ④ 行列リソース作成
 		D3D12_RESOURCE_DESC wvpResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(TransformationMatrix) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 		ID3D12Resource* wvpResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&wvpResource));
 		TransformationMatrix* wvpData = nullptr; wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
 		wvpData->wvp = MakeIdentity4x4(); wvpData->world = MakeIdentity4x4();
-		Transform transformSphere{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
+
+		Transform transformModel{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
 
 		ID3D12Resource* transformationMatrixResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&transformationMatrixResourceSprite));
 		TransformationMatrix* transformationMatrixDataSprite = nullptr; transformationMatrixResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&transformationMatrixDataSprite));
 		transformationMatrixDataSprite->wvp = MakeIdentity4x4(); transformationMatrixDataSprite->world = MakeIdentity4x4();
 		Transform transformSprite{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
 
-		// 💡⑤ UVTransform用の操作パラメータ変数を追加
-		Transform uvTransformSprite{
-			{ 1.0f, 1.0f, 1.0f }, // Scale
-			{ 0.0f, 0.0f, 0.0f }, // Rotate
-			{ 0.0f, 0.0f, 0.0f }  // Translate
-		};
+		// ⑤ UVTransform用パラメータ
+		Transform uvTransformSprite{ { 1.0f, 1.0f, 1.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f } };
 
-		// ⑥ 平行光源リソースの作成
+		// ⑥ 平行光源リソース作成
 		D3D12_RESOURCE_DESC directionalLightResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(DirectionalLight) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 		ID3D12Resource* directionalLightResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &directionalLightResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&directionalLightResource));
 		DirectionalLight* directionalLightData = nullptr; directionalLightResource->Map(0, nullptr, reinterpret_cast<void**>(&directionalLightData));
@@ -469,8 +567,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		ImGui_ImplDX12_Init(device, 2, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, srvDescriptorHeap, GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 0), GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 0));
 #endif
 
-		float cameraZ = -3.0f; bool isAutoRotate = true; bool useMonsterBall = true;
-		float pi_f = (float)pi;
+		float cameraTranslate[3] = { 0.0f, 4.0f, -10.0f };
+		float cameraRotate[3] = { 0.296f, 0.0f, 0.0f };
+		bool isAutoRotate = false; bool useMonsterBall = false;
+		float pi_f = 3.1415926535f;
+
+		bool drawSprite = false;
 
 		MSG msg{};
 		while (msg.message != WM_QUIT)
@@ -478,45 +580,56 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 			if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessage(&msg); }
 			else
 			{
-				if (isAutoRotate) { transformSphere.rotate[1] += 0.01f; if (transformSphere.rotate[1] > pi_f * 2.0f) transformSphere.rotate[1] -= pi_f * 2.0f; }
+				if (isAutoRotate) { transformModel.rotate[1] += 0.01f; if (transformModel.rotate[1] > pi_f * 2.0f) transformModel.rotate[1] -= pi_f * 2.0f; }
 
 #ifdef USE_IMGUI
 				ImGui_ImplDX12_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
 				ImGui::Begin("Settings");
-				if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::ColorEdit4("sphere color", &materialData->color.x); }
-				if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::SliderFloat("Camera Z", &cameraZ, -20.0f, -1.0f); }
-				if (ImGui::CollapsingHeader("TransformSphere", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::Checkbox("useMonsterBall", &useMonsterBall); ImGui::Checkbox("Auto Rotate", &isAutoRotate); ImGui::SliderFloat3("rotate", transformSphere.rotate, -pi_f, pi_f); }
-				if (ImGui::CollapsingHeader("TransformSprite", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::SliderFloat2("scale", transformSprite.scale, 0.1f, 5.0f); ImGui::SliderFloat2("translate", transformSprite.translate, -200.0f, 1000.0f); }
+				if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					ImGui::DragFloat3("CameraTranslate", cameraTranslate, 0.1f);
+					ImGui::SliderFloat3("CameraRotate", cameraRotate, -pi_f, pi_f);
+				}
+				if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::ColorEdit4("color", &materialData->color.x); }
+				if (ImGui::CollapsingHeader("TransformModel", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::Checkbox("useMonsterBall", &useMonsterBall); ImGui::Checkbox("Auto Rotate", &isAutoRotate); ImGui::SliderFloat3("rotate", transformModel.rotate, -pi_f, pi_f); }
 
-				// 💡UV操作用ImGuiパーツ (スライド「編集と行列の作成」に対応)
-				if (ImGui::CollapsingHeader("UV Transform Sprite", ImGuiTreeNodeFlags_DefaultOpen))
+				if (ImGui::CollapsingHeader("Sprite Options", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					ImGui::Checkbox("Draw Sprite", &drawSprite);
+				}
+				if (drawSprite && ImGui::CollapsingHeader("TransformSprite", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::SliderFloat2("scale", transformSprite.scale, 0.1f, 5.0f); ImGui::SliderFloat2("translate", transformSprite.translate, -200.0f, 1000.0f); }
+				if (drawSprite && ImGui::CollapsingHeader("UV Transform Sprite", ImGuiTreeNodeFlags_DefaultOpen))
 				{
 					ImGui::DragFloat2("UVTranslate", uvTransformSprite.translate, 0.01f, -10.0f, 10.0f);
 					ImGui::DragFloat2("UVScale", uvTransformSprite.scale, 0.01f, -10.0f, 10.0f);
-					ImGui::SliderAngle("UVRotate", &uvTransformSprite.rotate[2]); // z軸回転なので rotate[2]
+					ImGui::SliderAngle("UVRotate", &uvTransformSprite.rotate[2]);
 				}
-
 				if (ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) { ImGui::SliderFloat3("Light Direction", &directionalLightData->direction.x, -1.0f, 1.0f); ImGui::ColorEdit4("Light Color", &directionalLightData->color.x); ImGui::SliderFloat("Intensity", &directionalLightData->intensity, 0.0f, 5.0f); }
 				ImGui::End(); ImGui::Render();
 #endif
 
-				// 💡スプライト用UVTransform行列を作成して定数バッファに書き込む
 				Matrix4x4 uvTransformMatrix = MakeUVTransformMatrix(uvTransformSprite.scale, uvTransformSprite.rotate[2], uvTransformSprite.translate);
 				materialDataSprite->uvTransform = uvTransformMatrix;
 
-				// 通常のオブジェクトトランスフォーム計算
-				Matrix4x4 worldMatrixSphere = MakeAffineMatrix(transformSphere.scale, transformSphere.rotate, transformSphere.translate);
-				Matrix4x4 viewMatrixSphere = MakeIdentity4x4(); viewMatrixSphere.m[3][2] = -cameraZ;
-				Matrix4x4 projectionMatrixSphere = MakePerspectiveFovMatrix(0.45f, (float)kClientWidth / kClientHeight, 0.1f, 100.0f);
-				wvpData->wvp = Multiply(Multiply(worldMatrixSphere, viewMatrixSphere), projectionMatrixSphere);
-				wvpData->world = worldMatrixSphere;
+				// カメラ行列・プロジェクション行列計算
+				Matrix4x4 viewMatrix = MakeIdentity4x4();
+				viewMatrix.m[3][0] = -cameraTranslate[0];
+				viewMatrix.m[3][1] = -cameraTranslate[1];
+				viewMatrix.m[3][2] = -cameraTranslate[2];
+
+				Matrix4x4 worldMatrixModel = MakeAffineMatrix(transformModel.scale, transformModel.rotate, transformModel.translate);
+				Matrix4x4 projectionMatrixModel = MakePerspectiveFovMatrix(0.45f, (float)kClientWidth / kClientHeight, 0.1f, 100.0f);
+				wvpData->wvp = Multiply(Multiply(worldMatrixModel, viewMatrix), projectionMatrixModel);
+				wvpData->world = worldMatrixModel;
 
 				Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
 				Matrix4x4 projectionMatrixSprite = MakeOrthographicMatrix(0.0f, 0.0f, (float)kClientWidth, (float)kClientHeight, 0.0f, 100.0f);
 				transformationMatrixDataSprite->wvp = Multiply(worldMatrixSprite, projectionMatrixSprite);
 				transformationMatrixDataSprite->world = worldMatrixSprite;
 
-				commandAllocator->Reset(); commandList->Reset(commandAllocator, nullptr);
+				// 描画準備
+				commandAllocator->Reset();
+				commandList->Reset(commandAllocator, nullptr);
 				UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
 
 				D3D12_RESOURCE_BARRIER barrier{};
@@ -527,55 +640,75 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 				barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
 				commandList->ResourceBarrier(1, &barrier);
 
-				ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap }; commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+				ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
+				commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+
 				D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = GetCPUDescriptorHandle(dsvDescriptorHeap, descriptorSizeDSV, 0);
 				commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], false, &dsvHandle);
 
-				float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f }; commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
+				float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f };
+				commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 				commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-				commandList->RSSetViewports(1, &viewport); commandList->RSSetScissorRects(1, &scissorRect);
-				commandList->SetGraphicsRootSignature(rootSignature); commandList->SetPipelineState(pipelineState);
+				commandList->RSSetViewports(1, &viewport);
+				commandList->RSSetScissorRects(1, &scissorRect);
+				commandList->SetGraphicsRootSignature(rootSignature);
+				commandList->SetPipelineState(pipelineState);
 				commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 				commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
 
-				// 1. 3D球体の描画
+				// 1. 3Dモデル描画
 				commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
 				commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
 				commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
 				commandList->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU1);
-				commandList->DrawInstanced(kTotalVertices, 1, 0, 0);
+				commandList->DrawInstanced(static_cast<UINT>(modelData.vertices.size()), 1, 0, 0);
 
-				// 2. 2Dスプライトの描画
-				commandList->SetGraphicsRootConstantBufferView(0, materialResourceSprite->GetGPUVirtualAddress());
-				commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
-				commandList->IASetIndexBuffer(&indexBufferViewSprite);
-				commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
-				commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU1);
-				commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+				// 2. 2Dスプライト描画
+				if (drawSprite)
+				{
+					commandList->SetGraphicsRootConstantBufferView(0, materialResourceSprite->GetGPUVirtualAddress());
+					commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
+					commandList->IASetIndexBuffer(&indexBufferViewSprite);
+					commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
+					commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU1);
+					commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+				}
 
 #ifdef USE_IMGUI
 				ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
 #endif
-				barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET; barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+
+				barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+				barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
 				commandList->ResourceBarrier(1, &barrier);
+
 				commandList->Close();
-				ID3D12CommandList* commandLists[] = { commandList }; commandQueue->ExecuteCommandLists(1, commandLists);
+				ID3D12CommandList* commandLists[] = { commandList };
+				commandQueue->ExecuteCommandLists(1, commandLists);
 
 				swapChain->Present(1, 0);
-				fenceValue++; commandQueue->Signal(fence, fenceValue);
-				if (fence->GetCompletedValue() < fenceValue) { fence->SetEventOnCompletion(fenceValue, fenceEvent); WaitForSingleObject(fenceEvent, INFINITE); }
+				fenceValue++;
+				commandQueue->Signal(fence, fenceValue);
+				if (fence->GetCompletedValue() < fenceValue)
+				{
+					fence->SetEventOnCompletion(fenceValue, fenceEvent);
+					WaitForSingleObject(fenceEvent, INFINITE);
+				}
 			}
 		}
+
 #ifdef USE_IMGUI
-		ImGui_ImplDX12_Shutdown(); ImGui_ImplWin32_Shutdown(); ImGui::DestroyContext();
+		ImGui_ImplDX12_Shutdown();
+		ImGui_ImplWin32_Shutdown();
+		ImGui::DestroyContext();
 #endif
 
-		// アンマップ・解放
+		// リソース解放
 		directionalLightResource->Unmap(0, nullptr); directionalLightResource->Release();
 		materialResourceSprite->Unmap(0, nullptr); materialResourceSprite->Release();
-		indexResourceSprite->Unmap(0, nullptr); indexResourceSprite->Release();
+		indexResourceSprite->Release();
 		vertexResourceSprite->Release();
 		transformationMatrixResourceSprite->Unmap(0, nullptr); transformationMatrixResourceSprite->Release();
 		wvpResource->Unmap(0, nullptr); wvpResource->Release();
@@ -590,6 +723,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 		swapChain->Release(); commandList->Release(); commandAllocator->Release(); commandQueue->Release();
 		device->Release(); if (useAdapter) { useAdapter->Release(); } dxgiFactory->Release();
 	}
+
 #ifdef _DEBUG
 	IDXGIDebug1* dxgiDebug = nullptr;
 	if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug))))
