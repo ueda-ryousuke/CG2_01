@@ -10,7 +10,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
-#include <wrl.h> // ComPtrを使うために必要
+#include <wrl.h>
 
 // DXCコンパイルに必要なヘッダーとライブラリ
 #include <dxcapi.h>
@@ -28,6 +28,8 @@
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
+#include "AudioEngine.h"
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
 
@@ -375,10 +377,16 @@ ModelData LoadObjFile(const std::string& directoryPath, const std::string& filen
 
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 {
-	// 【重要】関数の最初で作ることで、一番最後にデストラクタが呼ばれて正しくリークチェックされる
+	// 【リークチェック構造体】関数のスコープ全体をカバー
 	D3DResourceLeakChecker leakCheck;
 
 	CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+	// --- オーディオエンジンの初期化・WAV読み込み ---
+	AudioEngine audioEngine;
+	audioEngine.Initialize();
+	SoundData soundData1 = audioEngine.LoadWave("Resources/fanfare.wav");
+
 	WNDCLASS wc{ 0, WindowProc, 0, 0, GetModuleHandle(nullptr), nullptr, LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"CG2WindowClass" };
 	RegisterClass(&wc);
 	const int32_t kClientWidth = 1280; const int32_t kClientHeight = 720;
@@ -626,6 +634,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 #ifdef USE_IMGUI
 				ImGui_ImplDX12_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
 				ImGui::Begin("Settings");
+
+				// 音声再生ボタン
+				if (ImGui::Button("Play Audio"))
+				{
+					audioEngine.PlayWave(soundData1);
+				}
+
 				if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
 				{
 					ImGui::DragFloat3("CameraTranslate", cameraTranslate, 0.1f);
@@ -759,6 +774,14 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 
 		CloseHandle(fenceEvent);
 	}
+
+	// =========================================================================
+	// 【後始末処理のルール適用】
+	// ① 先に AudioEngine::Finalize() で XAudio2 インスタンスを解放・安全に停止
+	// ② その後に Unload() で WAVE データのバッファメモリを解放
+	// =========================================================================
+	audioEngine.Finalize();             // XAudio2 本体の解放 (xAudio2.Reset())
+	audioEngine.Unload(&soundData1);    // 音声データのバッファ解放
 
 	UnregisterClass(wc.lpszClassName, wc.hInstance);
 	CoUninitialize();
