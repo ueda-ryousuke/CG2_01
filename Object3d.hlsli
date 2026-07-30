@@ -12,6 +12,7 @@ struct VertexShaderOutput
     float3 normal : NORMAL0; // 💡VSからPSへ渡すために法線を追加
 };
 
+
 // 💡スライド「Alignmentを考慮して書き換え」に対応
 struct Material
 {
