@@ -18,6 +18,7 @@ struct Material
 {
     float4 color;
     int enableLighting;
+    int lightingMode; // 0: ライティングなし, 1: Lambert, 2: Half Lambert
     // HLSL側では int(4バイト) の後ろに float4x4(64バイト) が来ると
     // 自動的に12バイトのパディングが挟まれます。これでC++側とアライメントが完全一致します
     float4x4 uvTransform;
