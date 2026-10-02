@@ -24,7 +24,6 @@ PixelShaderOutput main(VertexShaderOutput input)
     float4 transformedUV = mul(float4(input.texcoord, 0.0f, 1.0f), gMaterial.uvTransform);
     float4 textureColor = gTexture.Sample(gSampler, transformedUV.xy).bgra;
     
-    // 💡 ライティング方式の動的切り替え
     if (gMaterial.lightingMode == 1) // Lambert
     {
         float NdotL = dot(normalize(input.normal), -normalize(gDirectionalLight.direction));
@@ -35,7 +34,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     {
         float NdotL = dot(normalize(input.normal), -normalize(gDirectionalLight.direction));
         float halfLambert = pow(NdotL * 0.5f + 0.5f, 2.0f);
-        output.color = gMaterial.color * textureColor * gDirectionalLight.color * halfLambert * gDirectionalLight.intensity;
+        output.color.rgb = gMaterial.color.rgb * textureColor.rgb * gDirectionalLight.color.rgb * halfLambert * gDirectionalLight.intensity;
+        output.color.a = gMaterial.color.a * textureColor.a;
     }
     else // 0: Lightingなし
     {
