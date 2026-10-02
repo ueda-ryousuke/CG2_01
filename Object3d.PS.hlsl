@@ -24,6 +24,10 @@ PixelShaderOutput main(VertexShaderOutput input)
     float4 transformedUV = mul(float4(input.texcoord, 0.0f, 1.0f), gMaterial.uvTransform);
     float4 textureColor = gTexture.Sample(gSampler, transformedUV.xy).bgra;
     
+    if (textureColor.a <= 0.5)
+    {
+        discard;
+    }
     if (gMaterial.lightingMode == 1) // Lambert
     {
         float NdotL = dot(normalize(input.normal), -normalize(gDirectionalLight.direction));
@@ -42,5 +46,9 @@ PixelShaderOutput main(VertexShaderOutput input)
         output.color = gMaterial.color * textureColor;
     }
     
+    if (output.color.a == 0.0)
+    {
+        discard;
+    }
     return output;
 }

@@ -388,6 +388,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		ModelData planeModelData = LoadObjFile("resources", "plane.obj");
 		ModelData sphereModelData = CreateSphereModel(32);
+		ModelData fenceModelData = LoadObjFile("resources", "fence.obj");
 
 		// Planeバッファ
 		D3D12_RESOURCE_DESC vertexResourceDescPlane{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * planeModelData.vertices.size(), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
@@ -406,6 +407,17 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		std::memcpy(vertexDataSphere, sphereModelData.vertices.data(), sizeof(Vertex) * sphereModelData.vertices.size());
 		vertexResourceSphere->Unmap(0, nullptr);
 		D3D12_VERTEX_BUFFER_VIEW vertexBufferViewSphere{ vertexResourceSphere->GetGPUVirtualAddress(), static_cast<UINT>(sizeof(Vertex) * sphereModelData.vertices.size()), sizeof(Vertex) };
+
+		// フェンス用の頂点バッファを作成
+		D3D12_RESOURCE_DESC vertexResourceDescFence{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * fenceModelData.vertices.size(), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
+		Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourceFence = nullptr;
+		device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescFence, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceFence));
+		Vertex* vertexDataFence = nullptr;
+		vertexResourceFence->Map(0, nullptr, reinterpret_cast<void**>(&vertexDataFence));
+		std::memcpy(vertexDataFence, fenceModelData.vertices.data(), sizeof(Vertex)* fenceModelData.vertices.size());
+		vertexResourceFence->Unmap(0, nullptr);
+		D3D12_VERTEX_BUFFER_VIEW vertexBufferViewFence{ vertexResourceFence->GetGPUVirtualAddress(), static_cast<UINT>(sizeof(Vertex) * fenceModelData.vertices.size()), sizeof(Vertex) };
+
 
 		// Sprite Vertex Buffer
 		D3D12_RESOURCE_DESC vertexResourceDescSprite{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * 4, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
@@ -465,6 +477,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		std::vector<uint8_t> textureData2; D3D12_RESOURCE_DESC textureDesc2{}; LoadTextureFile(L"Resources/monsterBall.png", textureData2, textureDesc2);
 		Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2 = nullptr; device->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc2, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource2));
 		textureResource2->WriteToSubresource(0, nullptr, textureData2.data(), (UINT)(textureDesc2.Width * 4), (UINT)textureData2.size());
+		std::vector<uint8_t> textureDataFence;D3D12_RESOURCE_DESC textureDescFence{};LoadTextureFile(L"Resources/fence.png", textureDataFence, textureDescFence);
+		Microsoft::WRL::ComPtr<ID3D12Resource> textureResourceFence = nullptr;	device->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDescFence, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResourceFence));
+		textureResourceFence->WriteToSubresource(0, nullptr, textureDataFence.data(), (UINT)(textureDescFence.Width * 4), (UINT)textureDataFence.size());
 
 		D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU1 = GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 1);
 		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU1 = GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 1);
@@ -475,7 +490,12 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2 = GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 2);
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc2{ textureDesc2.Format, D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING }; srvDesc2.Texture2D.MipLevels = 1;
 		device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
-
+		
+		D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU3 = GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 3);
+		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU3 = GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 3);
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDescFence{ textureDescFence.Format, D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING };	srvDescFence.Texture2D.MipLevels = 1;
+		device->CreateShaderResourceView(textureResourceFence.Get(), &srvDescFence, textureSrvHandleCPU3);
+	
 		D3D12_VIEWPORT viewport{ 0.0f, 0.0f, (float)kClientWidth, (float)kClientHeight, 0.0f, 1.0f };
 		D3D12_RECT scissorRect{ 0, 0, kClientWidth, kClientHeight };
 
@@ -512,7 +532,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 				ImGui::Begin("Settings");
 
 				// モデル選択
-				const char* modelNames[] = { "Plane ", "Sphere " };
+				const char* modelNames[] = { "Plane ", "Sphere ", "Fence" };
 				ImGui::Combo("Model Select", &currentModelType, modelNames, IM_ARRAYSIZE(modelNames));
 
 				if (ImGui::CollapsingHeader("Object (SRT)", ImGuiTreeNodeFlags_DefaultOpen))
@@ -527,7 +547,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 				{
 					ImGui::ColorEdit4("Color", &materialData->color.x);
 					ImGui::Checkbox("useMonsterBall Texture", &useMonsterBall);
-
 					// ライティングモード選択
 					const char* lightingItems[] = { "None ", "Lambert", "Half Lambert" };
 					int currentLighting = materialData->lightingType;
@@ -614,10 +633,16 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 					commandList->IASetVertexBuffers(0, 1, &vertexBufferViewPlane);
 					commandList->DrawInstanced(static_cast<UINT>(planeModelData.vertices.size()), 1, 0, 0);
 				}
-				else
+				else if (currentModelType == 1)
 				{
 					commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSphere);
 					commandList->DrawInstanced(static_cast<UINT>(sphereModelData.vertices.size()), 1, 0, 0);
+				}
+				else if (currentModelType == 2) // Fence
+				{
+					commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU3);
+					commandList->IASetVertexBuffers(0, 1, &vertexBufferViewFence);
+					commandList->DrawInstanced(static_cast<UINT>(fenceModelData.vertices.size()), 1, 0, 0);
 				}
 
 				// 2. 2Dスプライト描画
