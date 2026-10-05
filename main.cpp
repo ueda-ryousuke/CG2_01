@@ -1,189 +1,3 @@
-かび
-kabi3479
-退席中
-﻿
-かび — 2026 / 10 / 02 11:29
-かいてる
-SIN — 2026 / 10 / 02 11 : 30
-なんでや？
-かび — 2026 / 10 / 02 11 : 30
-わけがわからん
-CG2がおわってるかもしれん
-SIN — 2026 / 10 / 02 11 : 40
-#include <Windows.h>
-#include <cstdint>
-#include <string>
-#include <format>
-#include <d3d12.h>
-#include <dxgi1_6.h>
-
-message.txt
-41 KB
-かび — 2026 / 10 / 02 11:47
-これ00_02ってなんかするの
-しないよねｗ
-SIN — 2026 / 10 / 02 11 : 47
-わかんない
-しなくていいと思う
-かび — 2026 / 10 / 02 11 : 50
-ありがとうございます。
-かび — 2026 / 10 / 02 12 : 27
-fence描画できたとおもったら～
-３Dならなくてちっくしょー
-かび — 2026 / 10 / 02 12 : 34
-とおもってたらできてました～
-かび — 2026 / 10 / 02 12 : 46
-てかもうだした？
-SIN — 2026 / 10 / 02 12 : 46
-ｗ
-だしたよ
-コメント書いて
-かび — 2026 / 10 / 02 12 : 46
-CG2のまんま？
-あね
-SIN — 2026 / 10 / 02 12 : 47
-うん
-かび — 2026 / 10 / 02 12 : 47
-これだすのはさ
-SIN — 2026 / 10 / 02 12 : 47
-リポジトリ招待して
-かび — 2026 / 10 / 02 12 : 47
-fenceまで
-のぶらんち
-SIN — 2026 / 10 / 02 12 : 47
-ＵＲＬは手終わり
-かび — 2026 / 10 / 02 12 : 47
-おくればいいん
-SIN — 2026 / 10 / 02 12 : 47
-そういうこと
-かび — 2026 / 10 / 02 12 : 47
-おｋ
-がちあざす
-SIN — 14 : 29
-#include <Windows.h>
-#include <cstdint>
-#include <string>
-#include <format>
-#include <d3d12.h>
-#include <dxgi1_6.h>
-
-message.txt
-41 KB
-struct VertexShaderInput
-{
-	float4 position : POSITION;
-	float2 texcoord : TEXCOORD0;
-	float3 normal : NORMAL0;
-};
-
-struct VertexShaderOutput
-{
-	float4 position : SV_POSITION;
-	float2 texcoord : TEXCOORD0;
-	float3 normal : NORMAL0;
-};
-
-// C++側のメモリ配置（16バイトアライメント）に合わせた構造体
-struct Material
-{
-	float4 color;
-	int enableLighting; // 0: 無効, 1: 有効
-	int lightingType; // 0: None, 1: Lambert, 2: Half Lambert
-	float2 padding; // パディング（16バイト境界合わせ）
-	float4x4 uvTransform;
-};
-
-struct TransformationMatrix
-{
-	float4x4 wvp;
-	float4x4 world;
-};
----
-#include "Object3d.hlsli"
-
-ConstantBuffer<TransformationMatrix> gTransformationMatrix : register(b1);
-
-VertexShaderOutput main(VertexShaderInput input)
-{
-	VertexShaderOutput output;
-
-	// WVP行列を用いて頂点座標をスクリーン空間へ変換
-	output.position = mul(input.position, gTransformationMatrix.wvp);
-
-	// UV座標は一旦そのままピクセルシェーダーへ渡す（変形はピクセル単位で行うため）
-	output.texcoord = input.texcoord;
-
-	// 法線をワールド座標系へ変換（左上3x3のみ掛け合わせる）して正規化し、PSへ渡す
-	output.normal = normalize(mul(input.normal, (float3x3)gTransformationMatrix.world));
-
-	return output;
-}
--- -
-SIN — 14:36
-#include "Object3d.hlsli"
-
-struct DirectionalLight
-{
-	float4 color;
-	float3 direction;
-	float intensity;
-};
-
-Texture2D<float4> gTexture : register(t0);
-SamplerState gSampler : register(s0);
-ConstantBuffer<Material> gMaterial : register(b0);
-ConstantBuffer<DirectionalLight> gDirectionalLight : register(b1);
-
-struct PixelShaderOutput
-{
-	float4 color : SV_TARGET0;
-};
-
-PixelShaderOutput main(VertexShaderOutput input)
-{
-	PixelShaderOutput output;
-
-	// UV変換行列を適用してテクスチャ座標を計算
-	float4 transformedUV = mul(float4(input.texcoord, 0.0f, 1.0f), gMaterial.uvTransform);
-	float4 textureColor = gTexture.Sample(gSampler, transformedUV.xy);
-
-	// ライティングの判定と計算
-	if (gMaterial.enableLighting != 0)
-	{
-		float3 N = normalize(input.normal);
-		float3 L = normalize(-gDirectionalLight.direction);
-		float NdotL = dot(N, L);
-
-		float lightingFactor = 1.0f;
-
-		// 0: None, 1: Lambert, 2: Half Lambert
-		if (gMaterial.lightingType == 1)
-		{
-			// Lambertian Reflectance
-			lightingFactor = saturate(NdotL);
-		}
-		else if (gMaterial.lightingType == 2)
-		{
-			// Half Lambert
-			lightingFactor = pow(NdotL * 0.5f + 0.5f, 2.0f);
-		}
-
-		output.color = gMaterial.color * textureColor * gDirectionalLight.color * lightingFactor * gDirectionalLight.intensity;
-	}
-	else
-	{
-		// ライティング無効（None）
-		output.color = gMaterial.color * textureColor;
-	}
-
-	return output;
-}
-﻿
-SIN
-sin10945
-
-ゲーム好きの一般人です〜
-よろしくお願いします(^^)
 #include <Windows.h>
 #include <cstdint>
 #include <string>
@@ -219,13 +33,12 @@ sin10945
 #pragma comment(lib,"dxgi.lib")
 #pragma comment(lib,"Windowscodecs.lib")
 
-#ifndef USE_IMGUI
-#define USE_IMGUI
-#endif
+#ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif
 
 // キーバッファ
 BYTE key[256] = {};
@@ -682,7 +495,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 				if (isAutoRotate) { transformModel.rotate.y += 0.01f; if (transformModel.rotate.y > pi_f * 2.0f) transformModel.rotate.y -= pi_f * 2.0f; }
 
-				assert(false && "assertのテスト");
+				//assert(false && "assertのテスト");
 
 #ifdef USE_IMGUI
 				ImGui_ImplDX12_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
@@ -847,5 +660,3 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	CoUninitialize();
 	return 0;
 }
-message.txt
-41 KB
