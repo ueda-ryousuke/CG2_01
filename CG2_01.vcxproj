@@ -64,7 +64,7 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <None Include="Object3d.hlsli" />
+    <None Include="Particle.hlsli" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DebugCamera.h" />

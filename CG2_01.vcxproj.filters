@@ -92,6 +92,6 @@
     <Text Include="externals\imgui\LICENSE.txt" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Object3d.hlsli" />
+    <None Include="Particle.hlsli" />
   </ItemGroup>
 </Project>
