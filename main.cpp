@@ -335,14 +335,14 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		input = new Input();
 		input->Initialize(hInstance,hwnd);
-
 		
-		// DirectInput
-		IDirectInput8* directInput = nullptr; DirectInput8Create(hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
-		IDirectInputDevice8* keyboard = nullptr; directInput->CreateDevice(GUID_SysKeyboard, &keyboard, NULL);
-		keyboard->SetDataFormat(&c_dfDIKeyboard); keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
-		delete input;
-		// XAudio2
+		
+		//// DirectInput
+		//IDirectInput8* directInput = nullptr; DirectInput8Create(hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
+		//IDirectInputDevice8* keyboard = nullptr; directInput->CreateDevice(GUID_SysKeyboard, &keyboard, NULL);
+		//keyboard->SetDataFormat(&c_dfDIKeyboard); keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
+		//delete input;
+		//XAudio2
 		Microsoft::WRL::ComPtr<IXAudio2> xAudio2; IXAudio2MasteringVoice* masterVoice = nullptr;
 		XAudio2Create(&xAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR); xAudio2->CreateMasteringVoice(&masterVoice);
 		SoundData soundData1 = SoundLoadWave("resources/fanfare.wav"); SoundPlayWave(xAudio2.Get(), soundData1);
@@ -496,12 +496,12 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 			else
 			{
 				std::memcpy(keyPre, key, sizeof(key));
-				keyboard->Acquire(); keyboard->GetDeviceState(sizeof(key), key);
+				input->Update();
 				debugCamera.Update(key);
 
 				if (isAutoRotate) { transformModel.rotate.y += 0.01f; if (transformModel.rotate.y > pi_f * 2.0f) transformModel.rotate.y -= pi_f * 2.0f; }
 
-				assert(false && "assertのテスト");
+				//assert(false && "assertのテスト");
 
 #ifdef USE_IMGUI
 				ImGui_ImplDX12_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
@@ -653,8 +653,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		ImGui_ImplDX12_Shutdown(); ImGui_ImplWin32_Shutdown(); ImGui::DestroyContext();
 #endif
 
-		if (keyboard) { keyboard->Unacquire(); keyboard->Release(); }
-		if (directInput) directInput->Release();
+		//if (keyboard) { keyboard->Unacquire(); keyboard->Release(); }
+		//if (directInput) directInput->Release();
 		xAudio2.Reset(); SoundUnload(&soundData1);
 
 		directionalLightResource->Unmap(0, nullptr); materialResourceSprite->Unmap(0, nullptr);
