@@ -12,6 +12,7 @@
 #include <sstream>  
 #include <iterator>
 #include <wrl.h> 
+#include"Input.h"
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
@@ -104,7 +105,7 @@ std::wstring ConvertString(const std::string& str)
 	return wstr;
 }
 
-// 補助用構造体（Vector3 は Vector3.h を使用）
+// 補助用構造体
 struct Vector2 { float x, y; };
 struct Vector4 { float x, y, z, w; };
 struct Vertex { Vector4 position; Vector2 texcoord; Vector3 normal; };
@@ -330,12 +331,17 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		Microsoft::WRL::ComPtr<ID3D12Fence> fence = nullptr; uint64_t fenceValue = 0; device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 		HANDLE fenceEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+		Input* input = nullptr;
 
+		input = new Input();
+		input->Initialize(hInstance,hwnd);
+
+		
 		// DirectInput
 		IDirectInput8* directInput = nullptr; DirectInput8Create(hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
 		IDirectInputDevice8* keyboard = nullptr; directInput->CreateDevice(GUID_SysKeyboard, &keyboard, NULL);
 		keyboard->SetDataFormat(&c_dfDIKeyboard); keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
-
+		delete input;
 		// XAudio2
 		Microsoft::WRL::ComPtr<IXAudio2> xAudio2; IXAudio2MasteringVoice* masterVoice = nullptr;
 		XAudio2Create(&xAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR); xAudio2->CreateMasteringVoice(&masterVoice);
