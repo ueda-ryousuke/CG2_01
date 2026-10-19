@@ -12,7 +12,7 @@
 #include <sstream>  
 #include <iterator>
 #include <wrl.h> 
-#include"Input.h"
+#include "Input.h"
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
@@ -40,14 +40,6 @@
 #include "externals/imgui/imgui_impl_win32.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
-
-// キーバッファ
-BYTE key[256] = {};
-BYTE keyPre[256] = {};
-
-bool IsKeyPressed(uint8_t keyCode) { return (key[keyCode] & 0x80) != 0; }
-bool IsKeyReleased(uint8_t keyCode) { return (key[keyCode] & 0x80) == 0; }
-bool IsKeyTriggered(uint8_t keyCode) { return ((key[keyCode] & 0x80) != 0) && ((keyPre[keyCode] & 0x80) == 0); }
 
 struct ChunkHeader { char id[4]; int32_t size; };
 struct RiffHeader { ChunkHeader chunk; char type[4]; };
@@ -332,13 +324,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		Microsoft::WRL::ComPtr<ID3D12Fence> fence = nullptr; uint64_t fenceValue = 0; device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 		HANDLE fenceEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
-		// Inputクラスの初期化（ここで確実にInitializeを呼ぶように修正）
+		// Inputクラスの初期化
 		Input* input = new Input();
 		input->Initialize(hInstance, hwnd);
-        if(input->TriggerKey(DIK_0))
-		{
-			OutputDebugStringA("Hit 0\n");
-		}
 
 		//XAudio2
 		Microsoft::WRL::ComPtr<IXAudio2> xAudio2; IXAudio2MasteringVoice* masterVoice = nullptr;
@@ -493,13 +481,17 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 			}
 			else
 			{
-				std::memcpy(keyPre, key, sizeof(key));
+				// メインループ内でInputの更新を行い、DebugCameraへキー状態を渡す
 				input->Update();
-				debugCamera.Update(key);
+				debugCamera.Update(input->GetKeyTable());
+
+				// キー入力判定の例（必要に応じてメインループ内で継続的に処理する）
+				if (input->TriggerKey(DIK_0))
+				{
+					OutputDebugStringA("Hit 0\n");
+				}
 
 				if (isAutoRotate) { transformModel.rotate.y += 0.01f; if (transformModel.rotate.y > pi_f * 2.0f) transformModel.rotate.y -= pi_f * 2.0f; }
-
-				//assert(false && "assertのテスト");
 
 #ifdef USE_IMGUI
 				ImGui_ImplDX12_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
