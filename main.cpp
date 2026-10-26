@@ -13,6 +13,7 @@
 #include <iterator>
 #include <wrl.h> 
 #include "Input.h"
+#include "WindowsAPI.h" 
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
@@ -273,15 +274,10 @@ ModelData LoadObjFile(const std::string& directoryPath, const std::string& filen
 
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)
 {
-	CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-	D3DResourceLeakChecker leakCheck;
+	WindowsAPI* windowsAPI = nullptr;
 
-	WNDCLASS wc{ 0, WindowProc, 0, 0, GetModuleHandle(nullptr), nullptr, LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"CG2WindowClass" };
-	RegisterClass(&wc);
-	const int32_t kClientWidth = 1280; const int32_t kClientHeight = 720;
-	RECT wrc = { 0, 0, kClientWidth, kClientHeight }; AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);
-	HWND hwnd = CreateWindow(wc.lpszClassName, L"CG2_evaluation_Work3", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top, nullptr, nullptr, wc.hInstance, nullptr);
-	ShowWindow(hwnd, SW_SHOW);
+	windowsAPI = new WindowsAPI();
+	windowsAPI->Initialize();
 
 	{
 		Microsoft::WRL::ComPtr<IDXGIFactory7> dxgiFactory = nullptr; CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
@@ -644,6 +640,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 #endif
 
 		delete input;
+		delete windowsAPI;
 
 		xAudio2.Reset(); SoundUnload(&soundData1);
 
