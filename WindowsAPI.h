@@ -26,6 +26,23 @@ public: // メンバ関数
 	HWND GetHwnd() const { return hwnd; }
 	HINSTANCE GetHInstance() const { return wc.hInstance; }
 
+	bool ProcessMessage()
+	{
+		MSG msg{};
+
+		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+		{
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+		}
+
+		if (msg.message == WM_QUIT)
+		{
+			return true;
+		}
+		return false;
+	}
+
 private: // メンバ変数
 	// ウィンドウハンドル
 	HWND hwnd = nullptr;
