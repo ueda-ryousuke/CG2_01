@@ -15,6 +15,7 @@ LRESULT CALLBACK WindowsAPI::WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPAR
 	{
 		// ウィンドウが破棄された
 	case WM_DESTROY:
+		// OSに対して、アプリの終了を伝える
 		PostQuitMessage(0);
 		return 0;
 	}
@@ -26,7 +27,7 @@ void WindowsAPI::Initialize()
 {
 	HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
 
-	//WNDCLASS wc{}; 
+	//WNDCLASS wc{}; // ウィンドウクラスの設定 (メンバ変数へ引っ越し)
 	wc.lpfnWndProc = WindowProc;
 	wc.lpszClassName = L"CG2WindowClass";
 	wc.hInstance = GetModuleHandle(nullptr);
@@ -58,4 +59,10 @@ void WindowsAPI::Initialize()
 
 void WindowsAPI::Update()
 {
+}
+
+void WindowsAPI::Finalize()
+{
+	CloseWindow(hwnd);
+	CoUninitialize();
 }

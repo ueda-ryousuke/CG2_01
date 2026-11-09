@@ -322,7 +322,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		// Inputクラスの初期化
 		Input* input = new Input();
-		input->Initialize(windowsAPI->GetHInstance(), windowsAPI->GetHwnd());
+		input->Initialize(windowsAPI);
 
 		//XAudio2
 		Microsoft::WRL::ComPtr<IXAudio2> xAudio2; IXAudio2MasteringVoice* masterVoice = nullptr;
@@ -640,7 +640,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 #endif
 
 		delete input;
-		delete windowsAPI;
 
 		xAudio2.Reset(); SoundUnload(&soundData1);
 
@@ -649,7 +648,12 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		CloseHandle(fenceEvent);
 	}
 
-	//UnregisterClass(wc.lpszClassName, wc.hInstance);
-	CoUninitialize();
+	// WindowsAPIの終了処理
+	windowsAPI->Finalize();
+
+	// WindowsAPI解放
+	delete windowsAPI;
+	windowsAPI = nullptr;
+
 	return 0;
 }
