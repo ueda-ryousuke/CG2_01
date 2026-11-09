@@ -54,6 +54,7 @@ void WindowsAPI::Initialize()
 		nullptr
 	);
 
+
 	ShowWindow(hwnd, SW_SHOW);
 }
 
