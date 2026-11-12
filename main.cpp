@@ -14,7 +14,7 @@
 #include <wrl.h> 
 #include "Input.h"
 #include "WindowsAPI.h" 
-
+#include"DirXCom.h"
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 #pragma comment(lib, "dinput8.lib")
@@ -64,7 +64,6 @@ SoundData SoundLoadWave(const char* filename)
 	file.close();
 	return { format.fmt, reinterpret_cast<BYTE*>(pBuffer), static_cast<unsigned int>(data.size) };
 }
-
 void SoundUnload(SoundData* soundData) { delete[] soundData->pBuffer; soundData->pBuffer = nullptr; }
 void SoundPlayWave(IXAudio2* xAudio2, const SoundData& soundData)
 {
@@ -279,6 +278,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	windowsAPI = new WindowsAPI();
 	windowsAPI->Initialize();
 
+	DirXCom* dirXCom = nullptr;
+	dirXCom = new DirXCom();
+	dirXCom->Intialize(windowsAPI);
 	{
 		Microsoft::WRL::ComPtr<IDXGIFactory7> dxgiFactory = nullptr; CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
 		Microsoft::WRL::ComPtr<IDXGIAdapter4> useAdapter = nullptr;
@@ -653,6 +655,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	// WindowsAPI解放
 	delete windowsAPI;
 	windowsAPI = nullptr;
-
+	
+	delete dirXCom;
 	return 0;
 }
