@@ -155,6 +155,7 @@ private: // メンバ変数
 	uint64_t fenceValue = 0;
 	HANDLE fenceEvent = nullptr;
 
+
 	// ビューポート矩形
 	D3D12_VIEWPORT viewport{};
 	// シザリング矩形
