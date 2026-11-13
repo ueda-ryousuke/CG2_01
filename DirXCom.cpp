@@ -9,7 +9,6 @@
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
-#pragma comment(lib, "dxcompiler.lib")
 
 using namespace Microsoft::WRL;
 
@@ -100,7 +99,7 @@ void DirXCom::InitializeRenderTargetView()
 	D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{ DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, D3D12_RTV_DIMENSION_TEXTURE2D };
 
 	// 裏表の2つ分
-	for (uint32_t i = 0; i < 2; ++i)
+	for (uint32_t i = 0; i < _countof(rtvHandles); ++i)
 	{
 		// RTVハンドルを取得
 		rtvHandles[i] = GetCPUDescriptorHandle(rtvDescriptorHeap, descriptorSizeRTV, i);
@@ -115,9 +114,6 @@ void DirXCom::InitializeDepthStencilView()
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{ DXGI_FORMAT_D24_UNORM_S8_UINT, D3D12_DSV_DIMENSION_TEXTURE2D };
 	// DSVをデスクリプタヒープの先頭につくる
 	device->CreateDepthStencilView(depthStencilResource.Get(), &dsvDesc, GetCPUDescriptorHandle(dsvDescriptorHeap, descriptorSizeDSV, 0));
-
-	// （元のコードの順序のまま）コマンドリストを閉じる
-	commandList->Close();
 }
 
 void DirXCom::InitializeFence()
@@ -181,6 +177,86 @@ D3D12_GPU_DESCRIPTOR_HANDLE DirXCom::GetGPUDescriptorHandle(const ComPtr<ID3D12D
 	D3D12_GPU_DESCRIPTOR_HANDLE handleGPU = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
 	handleGPU.ptr += (descriptorSize * index);
 	return handleGPU;
+}
+
+void DirXCom::PreDraw()
+{
+	// バックバッファの番号取得
+	UINT bbIndex = swapChain->GetCurrentBackBufferIndex();
+
+	// リソースバリアで書き込み可能に変更
+	D3D12_RESOURCE_BARRIER barrier{};
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Transition.pResource = swapChainResources[bbIndex].Get();
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	commandList->ResourceBarrier(1, &barrier);
+
+	// 描画先のRTVとDSVを指定する
+	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = GetCPUDescriptorHandle(dsvDescriptorHeap, descriptorSizeDSV, 0);
+	commandList->OMSetRenderTargets(1, &rtvHandles[bbIndex], false, &dsvHandle);
+
+	// 画面全体の色をクリア
+	float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f };
+	commandList->ClearRenderTargetView(rtvHandles[bbIndex], clearColor, 0, nullptr);
+
+	// 画面全体の深度をクリア
+	commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+	// SRV用のデスクリプタヒープを指定する
+	ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap.Get() };
+	commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+
+	// ビューポート領域の設定
+	commandList->RSSetViewports(1, &viewport);
+
+	// シザー矩形の設定
+	commandList->RSSetScissorRects(1, &scissorRect);
+}
+
+void DirXCom::PostDraw()
+{
+	// バックバッファの番号取得
+	UINT bbIndex = swapChain->GetCurrentBackBufferIndex();
+
+	// リソースバリアで表示状態に変更
+	D3D12_RESOURCE_BARRIER barrier{};
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Transition.pResource = swapChainResources[bbIndex].Get();
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+	commandList->ResourceBarrier(1, &barrier);
+
+	// グラフィックスコマンドをクローズ
+	commandList->Close();
+
+	// GPUコマンドの実行
+	ID3D12CommandList* commandLists[] = { commandList.Get() };
+	commandQueue->ExecuteCommandLists(1, commandLists);
+
+	// GPU画面の交換を通知
+	swapChain->Present(1, 0);
+
+	// Fenceの値を更新
+	fenceValue++;
+
+	// コマンドキューにシグナルを送る
+	commandQueue->Signal(fence.Get(), fenceValue);
+
+	// コマンド完了待ち
+	if (fence->GetCompletedValue() < fenceValue)
+	{
+		fence->SetEventOnCompletion(fenceValue, fenceEvent);
+		WaitForSingleObject(fenceEvent, INFINITE);
+	}
+
+	// コマンドアロケーターのリセット
+	commandAllocator->Reset();
+
+	// コマンドリストのリセット
+	commandList->Reset(commandAllocator.Get(), nullptr);
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE DirXCom::GetSRVCPUDescriptorHandle(uint32_t index)

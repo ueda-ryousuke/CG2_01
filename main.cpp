@@ -87,6 +87,7 @@ struct D3DResourceLeakChecker
 	}
 };
 
+/* StringUtility.h / StringUtility.cpp に移植済み
 std::wstring ConvertString(const std::string& str)
 {
 	if (str.empty()) return L"";
@@ -96,6 +97,7 @@ std::wstring ConvertString(const std::string& str)
 	MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], sizeNeeded);
 	return wstr;
 }
+*/
 
 // 補助用構造体
 struct Vector2 { float x, y; };
@@ -282,6 +284,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	dirXCom = new DirXCom();
 	dirXCom->Intialize(windowsAPI);
 	{
+		/* DirectX初期化（DirXComに移植済み）：デバイス〜フェンス
 		Microsoft::WRL::ComPtr<IDXGIFactory7> dxgiFactory = nullptr; CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
 		Microsoft::WRL::ComPtr<IDXGIAdapter4> useAdapter = nullptr;
 		dxgiFactory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&useAdapter));
@@ -321,6 +324,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		Microsoft::WRL::ComPtr<ID3D12Fence> fence = nullptr; uint64_t fenceValue = 0; device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 		HANDLE fenceEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+		*/
 
 		// Inputクラスの初期化
 		Input* input = new Input();
@@ -331,6 +335,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		XAudio2Create(&xAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR); xAudio2->CreateMasteringVoice(&masterVoice);
 		SoundData soundData1 = SoundLoadWave("resources/fanfare.wav"); SoundPlayWave(xAudio2.Get(), soundData1);
 
+		/* 次のスライドでDirXCom経由に直すまで一旦コメントアウト（初期化はDirXComに移植済み）
 		Microsoft::WRL::ComPtr<IDxcUtils> dxcUtils; Microsoft::WRL::ComPtr<IDxcCompiler3> dxcCompiler; Microsoft::WRL::ComPtr<IDxcIncludeHandler> includeHandler;
 		DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils)); DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler)); dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
 
@@ -469,6 +474,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		// 表示モデル切り替え (0: Plane, 1: Sphere)
 		int currentModelType = 1;
+		*/
 
 		while (true) // ゲームループ
 		{
@@ -481,7 +487,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 			// メインループ内でInputの更新を行い、DebugCameraへキー状態を渡す
 			input->Update();
-			debugCamera.Update(input->GetKeyTable());
+			// debugCamera.Update(input->GetKeyTable());
 
 			// キー入力判定の例（必要に応じてメインループ内で継続的に処理する）
 			if (input->TriggerKey(DIK_0))
@@ -489,6 +495,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 				OutputDebugStringA("Hit 0\n");
 			}
 
+			/* 描画準備編の途中：更新処理・ImGui
 			if (isAutoRotate) { transformModel.rotate.y += 0.01f; if (transformModel.rotate.y > pi_f * 2.0f) transformModel.rotate.y -= pi_f * 2.0f; }
 
 #ifdef USE_IMGUI
@@ -559,29 +566,11 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 			transformationMatrixDataSprite->wvp = Matrix4x4::Multiply(worldMatrixSprite, projectionMatrixSprite);
 			transformationMatrixDataSprite->world = worldMatrixSprite;
 
-			commandAllocator->Reset();
-			commandList->Reset(commandAllocator.Get(), nullptr);
-			UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
+			*/
+			// 描画前処理
+			dirXCom->PreDraw();
 
-			D3D12_RESOURCE_BARRIER barrier{}; barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-			barrier.Transition.pResource = swapChainResources[backBufferIndex].Get();
-			barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-			commandList->ResourceBarrier(1, &barrier);
-
-			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap.Get() };
-			commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
-
-			D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = GetCPUDescriptorHandle(dsvDescriptorHeap.Get(), descriptorSizeDSV, 0);
-			commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], false, &dsvHandle);
-
-			float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f };
-			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
-			commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-
-			commandList->RSSetViewports(1, &viewport);
-			commandList->RSSetScissorRects(1, &scissorRect);
+			/* 描画準備編の途中：描画コマンド
 			commandList->SetGraphicsRootSignature(rootSignature.Get());
 			commandList->SetPipelineState(pipelineState.Get());
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -618,22 +607,10 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 #ifdef USE_IMGUI
 			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList.Get());
 #endif
+			*/
 
-			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-			commandList->ResourceBarrier(1, &barrier);
-
-			commandList->Close();
-			ID3D12CommandList* commandLists[] = { commandList.Get() };
-			commandQueue->ExecuteCommandLists(1, commandLists);
-
-			swapChain->Present(1, 0);
-			fenceValue++; commandQueue->Signal(fence.Get(), fenceValue);
-			if (fence->GetCompletedValue() < fenceValue)
-			{
-				fence->SetEventOnCompletion(fenceValue, fenceEvent);
-				WaitForSingleObject(fenceEvent, INFINITE);
-			}
+			// 描画後処理
+			dirXCom->PostDraw();
 		}
 
 #ifdef USE_IMGUI
@@ -644,9 +621,11 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		xAudio2.Reset(); SoundUnload(&soundData1);
 
+		/* リソース解放（変数は次のスライドで対応）
 		directionalLightResource->Unmap(0, nullptr); materialResourceSprite->Unmap(0, nullptr);
 		transformationMatrixResourceSprite->Unmap(0, nullptr); wvpResource->Unmap(0, nullptr); materialResource->Unmap(0, nullptr);
 		CloseHandle(fenceEvent);
+		*/
 	}
 
 	// WindowsAPIの終了処理
@@ -655,7 +634,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	// WindowsAPI解放
 	delete windowsAPI;
 	windowsAPI = nullptr;
-	
+
 	delete dirXCom;
 	return 0;
 }
