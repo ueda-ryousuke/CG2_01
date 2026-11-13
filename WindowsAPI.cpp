@@ -1,6 +1,8 @@
 #include "WindowsAPI.h"
 #include <cstdint>
 
+#pragma comment(lib, "winmm.lib")
+
 #include "externals/imgui/imgui.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -25,6 +27,9 @@ LRESULT CALLBACK WindowsAPI::WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPAR
 
 void WindowsAPI::Initialize()
 {
+	// システムタイマーの分解能を上げる
+	timeBeginPeriod(1);
+
 	HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
 
 	//WNDCLASS wc{}; // ウィンドウクラスの設定 (メンバ変数へ引っ越し)

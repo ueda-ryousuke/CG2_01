@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <chrono>
 #include "WindowsAPI.h"
 #include "externals/DirectXTex/DirectXTex.h"
 
@@ -92,6 +93,11 @@ private: // 初期化用のメンバ関数
 	void InitializeImGui();
 
 private: // 内部処理用のメンバ関数
+	// FPS固定初期化
+	void InitializeFixFPS();
+	// FPS固定更新
+	void UpdateFixFPS();
+
 	/// <summary>
 	/// デスクリプタヒープを生成する
 	/// </summary>
@@ -153,6 +159,9 @@ private: // メンバ変数
 	D3D12_VIEWPORT viewport{};
 	// シザリング矩形
 	D3D12_RECT scissorRect{};
+
+	// 記録時間(FPS固定用)
+	std::chrono::steady_clock::time_point reference_;
 
 	// DXCユーティリティ
 	Microsoft::WRL::ComPtr<IDxcUtils> dxcUtils;
