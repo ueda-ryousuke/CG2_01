@@ -15,6 +15,7 @@
 #include "Input.h"
 #include "WindowsAPI.h" 
 #include"DirXCom.h"
+#include "D3DResourceLeakChecker.h"
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 #pragma comment(lib, "dinput8.lib")
@@ -75,19 +76,6 @@ void SoundPlayWave(IXAudio2* xAudio2, const SoundData& soundData)
 	}
 }
 
-struct D3DResourceLeakChecker
-{
-	~D3DResourceLeakChecker()
-	{
-		Microsoft::WRL::ComPtr<IDXGIDebug1> debug;
-		if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug))))
-		{
-			debug->ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_FLAGS(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
-		}
-	}
-};
-
-/* StringUtility.h / StringUtility.cpp に移植済み
 std::wstring ConvertString(const std::string& str)
 {
 	if (str.empty()) return L"";
@@ -97,7 +85,6 @@ std::wstring ConvertString(const std::string& str)
 	MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], sizeNeeded);
 	return wstr;
 }
-*/
 
 // 補助用構造体
 struct Vector2 { float x, y; };
@@ -335,10 +322,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		XAudio2Create(&xAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR); xAudio2->CreateMasteringVoice(&masterVoice);
 		SoundData soundData1 = SoundLoadWave("resources/fanfare.wav"); SoundPlayWave(xAudio2.Get(), soundData1);
 
-		/* 次のスライドでDirXCom経由に直すまで一旦コメントアウト（初期化はDirXComに移植済み）
-		Microsoft::WRL::ComPtr<IDxcUtils> dxcUtils; Microsoft::WRL::ComPtr<IDxcCompiler3> dxcCompiler; Microsoft::WRL::ComPtr<IDxcIncludeHandler> includeHandler;
-		DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils)); DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler)); dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
-
 		D3D12_ROOT_PARAMETER rootParameters[4] = {};
 		rootParameters[0] = { D3D12_ROOT_PARAMETER_TYPE_CBV, {}, D3D12_SHADER_VISIBILITY_PIXEL }; rootParameters[0].Descriptor.ShaderRegister = 0;
 		rootParameters[1] = { D3D12_ROOT_PARAMETER_TYPE_CBV, {}, D3D12_SHADER_VISIBILITY_VERTEX }; rootParameters[1].Descriptor.ShaderRegister = 1;
@@ -350,7 +333,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		D3D12_ROOT_SIGNATURE_DESC descriptionRootSignature{ _countof(rootParameters), rootParameters, _countof(staticSamplers), staticSamplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT };
 		Microsoft::WRL::ComPtr<ID3DBlob> signatureBlob = nullptr; Microsoft::WRL::ComPtr<ID3DBlob> errorBlob = nullptr; D3D12SerializeRootSignature(&descriptionRootSignature, D3D_ROOT_SIGNATURE_VERSION_1, &signatureBlob, &errorBlob);
-		Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature = nullptr; device->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
+		Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature = nullptr; dirXCom->GetDevice()->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
 
 		D3D12_INPUT_ELEMENT_DESC inputElementDescs[3] = {
 			{"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -359,13 +342,13 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		};
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
 		psoDesc.pRootSignature = rootSignature.Get(); psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
-		Microsoft::WRL::ComPtr<IDxcBlob> vertexShaderBlob = CompileShader(L"Object3d.VS.hlsl", L"vs_6_0", dxcUtils, dxcCompiler, includeHandler);
-		Microsoft::WRL::ComPtr<IDxcBlob> pixelShaderBlob = CompileShader(L"Object3d.PS.hlsl", L"ps_6_0", dxcUtils, dxcCompiler, includeHandler);
+		Microsoft::WRL::ComPtr<IDxcBlob> vertexShaderBlob = dirXCom->CompileShader(L"Object3d.VS.hlsl", L"vs_6_0");
+		Microsoft::WRL::ComPtr<IDxcBlob> pixelShaderBlob = dirXCom->CompileShader(L"Object3d.PS.hlsl", L"ps_6_0");
 		psoDesc.VS = { vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize() }; psoDesc.PS = { pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize() };
 		psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; psoDesc.RasterizerState = { D3D12_FILL_MODE_SOLID, D3D12_CULL_MODE_NONE };
 		psoDesc.DepthStencilState = { TRUE, D3D12_DEPTH_WRITE_MASK_ALL, D3D12_COMPARISON_FUNC_LESS_EQUAL }; psoDesc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 		psoDesc.NumRenderTargets = 1; psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE; psoDesc.SampleDesc.Count = 1; psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
-		Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState = nullptr; device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
+		Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState = nullptr; dirXCom->GetDevice()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
 
 		D3D12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
 
@@ -375,7 +358,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		// Planeバッファ
 		D3D12_RESOURCE_DESC vertexResourceDescPlane{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * planeModelData.vertices.size(), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 		Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourcePlane = nullptr;
-		device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescPlane, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourcePlane));
+		dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescPlane, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourcePlane));
 		Vertex* vertexDataPlane = nullptr; vertexResourcePlane->Map(0, nullptr, reinterpret_cast<void**>(&vertexDataPlane));
 		std::memcpy(vertexDataPlane, planeModelData.vertices.data(), sizeof(Vertex) * planeModelData.vertices.size());
 		vertexResourcePlane->Unmap(0, nullptr);
@@ -384,7 +367,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		// Sphereバッファ
 		D3D12_RESOURCE_DESC vertexResourceDescSphere{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * sphereModelData.vertices.size(), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 		Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourceSphere = nullptr;
-		device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescSphere, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSphere));
+		dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescSphere, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSphere));
 		Vertex* vertexDataSphere = nullptr; vertexResourceSphere->Map(0, nullptr, reinterpret_cast<void**>(&vertexDataSphere));
 		std::memcpy(vertexDataSphere, sphereModelData.vertices.data(), sizeof(Vertex) * sphereModelData.vertices.size());
 		vertexResourceSphere->Unmap(0, nullptr);
@@ -392,7 +375,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		// Sprite Vertex Buffer
 		D3D12_RESOURCE_DESC vertexResourceDescSprite{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * 4, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
-		Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescSprite, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSprite));
+		Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourceSprite = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexResourceDescSprite, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexResourceSprite));
 		D3D12_VERTEX_BUFFER_VIEW vertexBufferViewSprite{ vertexResourceSprite->GetGPUVirtualAddress(), sizeof(Vertex) * 4, sizeof(Vertex) };
 		Vertex* vertexDataSprite = nullptr; vertexResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&vertexDataSprite));
 		Vector3 nSprite = { 0.0f, 0.0f, -1.0f };
@@ -403,7 +386,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		vertexResourceSprite->Unmap(0, nullptr);
 
 		D3D12_RESOURCE_DESC indexResourceDescSprite{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(uint32_t) * 6, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
-		Microsoft::WRL::ComPtr<ID3D12Resource> indexResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &indexResourceDescSprite, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexResourceSprite));
+		Microsoft::WRL::ComPtr<ID3D12Resource> indexResourceSprite = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &indexResourceDescSprite, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexResourceSprite));
 		D3D12_INDEX_BUFFER_VIEW indexBufferViewSprite{ indexResourceSprite->GetGPUVirtualAddress(), sizeof(uint32_t) * 6, DXGI_FORMAT_R32_UINT };
 		uint32_t* indexDataSprite = nullptr; indexResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&indexDataSprite));
 		indexDataSprite[0] = 0; indexDataSprite[1] = 1; indexDataSprite[2] = 2; indexDataSprite[3] = 1; indexDataSprite[4] = 3; indexDataSprite[5] = 2;
@@ -411,61 +394,53 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		D3D12_RESOURCE_DESC materialResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(Material) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 
-		Microsoft::WRL::ComPtr<ID3D12Resource> materialResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResource));
+		Microsoft::WRL::ComPtr<ID3D12Resource> materialResource = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResource));
 		Material* materialData = nullptr; materialResource->Map(0, nullptr, reinterpret_cast<void**>(&materialData));
 		materialData->color = { 1.0f, 1.0f, 1.0f, 1.0f }; materialData->enableLighting = 1; materialData->lightingType = 2; // デフォルト: Half Lambert
 		materialData->uvTransform = Matrix4x4::MakeIdentity4x4();
 
-		Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResourceSprite));
+		Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &materialResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&materialResourceSprite));
 		Material* materialDataSprite = nullptr; materialResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&materialDataSprite));
 		materialDataSprite->color = { 1.0f, 1.0f, 1.0f, 1.0f }; materialDataSprite->enableLighting = 0; materialDataSprite->lightingType = 0;
 		materialDataSprite->uvTransform = Matrix4x4::MakeIdentity4x4();
 
 		D3D12_RESOURCE_DESC wvpResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(TransformationMatrix) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
-		Microsoft::WRL::ComPtr<ID3D12Resource> wvpResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&wvpResource));
+		Microsoft::WRL::ComPtr<ID3D12Resource> wvpResource = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&wvpResource));
 		TransformationMatrix* wvpData = nullptr; wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
 		wvpData->wvp = Matrix4x4::MakeIdentity4x4(); wvpData->world = Matrix4x4::MakeIdentity4x4();
 
 		Transform transformModel;
 
-		Microsoft::WRL::ComPtr<ID3D12Resource> transformationMatrixResourceSprite = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&transformationMatrixResourceSprite));
+		Microsoft::WRL::ComPtr<ID3D12Resource> transformationMatrixResourceSprite = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &wvpResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&transformationMatrixResourceSprite));
 		TransformationMatrix* transformationMatrixDataSprite = nullptr; transformationMatrixResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&transformationMatrixDataSprite));
 		transformationMatrixDataSprite->wvp = Matrix4x4::MakeIdentity4x4(); transformationMatrixDataSprite->world = Matrix4x4::MakeIdentity4x4();
 		Transform transformSprite;
 		Transform uvTransformSprite;
 
 		D3D12_RESOURCE_DESC directionalLightResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(DirectionalLight) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
-		Microsoft::WRL::ComPtr<ID3D12Resource> directionalLightResource = nullptr; device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &directionalLightResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&directionalLightResource));
+		Microsoft::WRL::ComPtr<ID3D12Resource> directionalLightResource = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &directionalLightResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&directionalLightResource));
 		DirectionalLight* directionalLightData = nullptr; directionalLightResource->Map(0, nullptr, reinterpret_cast<void**>(&directionalLightData));
 		directionalLightData->color = { 1.0f, 1.0f, 1.0f, 1.0f }; directionalLightData->direction = { 0.0f, -1.0f, 0.0f }; directionalLightData->intensity = 1.0f;
 
 		// Textures
 		std::vector<uint8_t> textureData; D3D12_RESOURCE_DESC textureDesc{}; LoadTextureFile(L"Resources/uvChecker.png", textureData, textureDesc);
 		D3D12_HEAP_PROPERTIES textureHeapProps{ D3D12_HEAP_TYPE_CUSTOM, D3D12_CPU_PAGE_PROPERTY_WRITE_BACK, D3D12_MEMORY_POOL_L0 };
-		Microsoft::WRL::ComPtr<ID3D12Resource> textureResource = nullptr; device->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource));
+		Microsoft::WRL::ComPtr<ID3D12Resource> textureResource = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource));
 		textureResource->WriteToSubresource(0, nullptr, textureData.data(), (UINT)(textureDesc.Width * 4), (UINT)textureData.size());
 
 		std::vector<uint8_t> textureData2; D3D12_RESOURCE_DESC textureDesc2{}; LoadTextureFile(L"Resources/monsterBall.png", textureData2, textureDesc2);
-		Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2 = nullptr; device->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc2, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource2));
+		Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2 = nullptr; dirXCom->GetDevice()->CreateCommittedResource(&textureHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc2, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&textureResource2));
 		textureResource2->WriteToSubresource(0, nullptr, textureData2.data(), (UINT)(textureDesc2.Width * 4), (UINT)textureData2.size());
 
-		D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU1 = GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 1);
-		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU1 = GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 1);
+		D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU1 = dirXCom->GetSRVCPUDescriptorHandle(1);
+		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU1 = dirXCom->GetSRVGPUDescriptorHandle(1);
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc1{ textureDesc.Format, D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING }; srvDesc1.Texture2D.MipLevels = 1;
-		device->CreateShaderResourceView(textureResource.Get(), &srvDesc1, textureSrvHandleCPU1);
+		dirXCom->GetDevice()->CreateShaderResourceView(textureResource.Get(), &srvDesc1, textureSrvHandleCPU1);
 
-		D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2 = GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 2);
-		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2 = GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 2);
+		D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2 = dirXCom->GetSRVCPUDescriptorHandle(2);
+		D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2 = dirXCom->GetSRVGPUDescriptorHandle(2);
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc2{ textureDesc2.Format, D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING }; srvDesc2.Texture2D.MipLevels = 1;
-		device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
-
-		D3D12_VIEWPORT viewport{ 0.0f, 0.0f, (float)WindowsAPI::kClientWidth, (float)WindowsAPI::kClientHeight, 0.0f, 1.0f };
-		D3D12_RECT scissorRect{ 0, 0, WindowsAPI::kClientWidth, WindowsAPI::kClientHeight };
-
-#ifdef USE_IMGUI
-		IMGUI_CHECKVERSION(); ImGui::CreateContext(); ImGui::StyleColorsDark(); ImGui_ImplWin32_Init(windowsAPI->GetHwnd());
-		ImGui_ImplDX12_Init(device.Get(), 2, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, srvDescriptorHeap.Get(), GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 0), GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 0));
-#endif
+		dirXCom->GetDevice()->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
 
 		DebugCamera debugCamera; debugCamera.Initialize();
 		bool isAutoRotate = false; bool useMonsterBall = false;
@@ -474,7 +449,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		// 表示モデル切り替え (0: Plane, 1: Sphere)
 		int currentModelType = 1;
-		*/
 
 		while (true) // ゲームループ
 		{
@@ -487,7 +461,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 			// メインループ内でInputの更新を行い、DebugCameraへキー状態を渡す
 			input->Update();
-			// debugCamera.Update(input->GetKeyTable());
+			debugCamera.Update(input->GetKeyTable());
 
 			// キー入力判定の例（必要に応じてメインループ内で継続的に処理する）
 			if (input->TriggerKey(DIK_0))
@@ -495,7 +469,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 				OutputDebugStringA("Hit 0\n");
 			}
 
-			/* 描画準備編の途中：更新処理・ImGui
 			if (isAutoRotate) { transformModel.rotate.y += 0.01f; if (transformModel.rotate.y > pi_f * 2.0f) transformModel.rotate.y -= pi_f * 2.0f; }
 
 #ifdef USE_IMGUI
@@ -566,48 +539,45 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 			transformationMatrixDataSprite->wvp = Matrix4x4::Multiply(worldMatrixSprite, projectionMatrixSprite);
 			transformationMatrixDataSprite->world = worldMatrixSprite;
 
-			*/
 			// 描画前処理
 			dirXCom->PreDraw();
 
-			/* 描画準備編の途中：描画コマンド
-			commandList->SetGraphicsRootSignature(rootSignature.Get());
-			commandList->SetPipelineState(pipelineState.Get());
-			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			dirXCom->GetCommandList()->SetGraphicsRootSignature(rootSignature.Get());
+			dirXCom->GetCommandList()->SetPipelineState(pipelineState.Get());
+			dirXCom->GetCommandList()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-			commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
+			dirXCom->GetCommandList()->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
 
 			// 1. 3Dモデル描画
-			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU1);
+			dirXCom->GetCommandList()->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
+			dirXCom->GetCommandList()->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
+			dirXCom->GetCommandList()->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU1);
 
 			if (currentModelType == 0)
 			{
-				commandList->IASetVertexBuffers(0, 1, &vertexBufferViewPlane);
-				commandList->DrawInstanced(static_cast<UINT>(planeModelData.vertices.size()), 1, 0, 0);
+				dirXCom->GetCommandList()->IASetVertexBuffers(0, 1, &vertexBufferViewPlane);
+				dirXCom->GetCommandList()->DrawInstanced(static_cast<UINT>(planeModelData.vertices.size()), 1, 0, 0);
 			}
 			else
 			{
-				commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSphere);
-				commandList->DrawInstanced(static_cast<UINT>(sphereModelData.vertices.size()), 1, 0, 0);
+				dirXCom->GetCommandList()->IASetVertexBuffers(0, 1, &vertexBufferViewSphere);
+				dirXCom->GetCommandList()->DrawInstanced(static_cast<UINT>(sphereModelData.vertices.size()), 1, 0, 0);
 			}
 
 			// 2. 2Dスプライト描画
 			if (drawSprite)
 			{
-				commandList->SetGraphicsRootConstantBufferView(0, materialResourceSprite->GetGPUVirtualAddress());
-				commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
-				commandList->IASetIndexBuffer(&indexBufferViewSprite);
-				commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
-				commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU1);
-				commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+				dirXCom->GetCommandList()->SetGraphicsRootConstantBufferView(0, materialResourceSprite->GetGPUVirtualAddress());
+				dirXCom->GetCommandList()->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
+				dirXCom->GetCommandList()->IASetIndexBuffer(&indexBufferViewSprite);
+				dirXCom->GetCommandList()->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
+				dirXCom->GetCommandList()->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU1);
+				dirXCom->GetCommandList()->DrawIndexedInstanced(6, 1, 0, 0, 0);
 			}
 
 #ifdef USE_IMGUI
-			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList.Get());
+			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), dirXCom->GetCommandList());
 #endif
-			*/
 
 			// 描画後処理
 			dirXCom->PostDraw();
@@ -621,11 +591,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 		xAudio2.Reset(); SoundUnload(&soundData1);
 
-		/* リソース解放（変数は次のスライドで対応）
 		directionalLightResource->Unmap(0, nullptr); materialResourceSprite->Unmap(0, nullptr);
 		transformationMatrixResourceSprite->Unmap(0, nullptr); wvpResource->Unmap(0, nullptr); materialResource->Unmap(0, nullptr);
-		CloseHandle(fenceEvent);
-		*/
+		// CloseHandle(fenceEvent); // フェンスイベントはDirXComのメンバ変数のためmain側では閉じない
 	}
 
 	// WindowsAPIの終了処理

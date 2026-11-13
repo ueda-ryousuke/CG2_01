@@ -15,6 +15,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="D3DResourceLeakChecker.cpp" />
     <ClCompile Include="DebugCamera.cpp" />
     <ClCompile Include="DirXCom.cpp" />
     <ClCompile Include="externals\imgui\imgui.cpp">
@@ -81,6 +82,7 @@
     <None Include="Object3d.hlsli" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="D3DResourceLeakChecker.h" />
     <ClInclude Include="DebugCamera.h" />
     <ClInclude Include="DirXCom.h" />
     <ClInclude Include="externals\imgui\imconfig.h" />

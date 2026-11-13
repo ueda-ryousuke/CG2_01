@@ -1,5 +1,7 @@
 #include "DirXCom.h"
 #include <cassert>
+#include <vector>
+#include "externals/DirectXTex/d3dx12.h"
 
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
@@ -11,6 +13,17 @@
 #pragma comment(lib, "dxgi.lib")
 
 using namespace Microsoft::WRL;
+
+// stringをwstringに変換する（LoadTexture用）
+static std::wstring ConvertString(const std::string& str)
+{
+	if (str.empty()) return L"";
+	int sizeNeeded = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, NULL, 0);
+	if (sizeNeeded == 0) sizeNeeded = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, NULL, 0);
+	std::wstring wstr(sizeNeeded - 1, 0);
+	MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], sizeNeeded);
+	return wstr;
+}
 
 void DirXCom::Intialize(WindowsAPI* windowsAPI)
 {
@@ -257,6 +270,115 @@ void DirXCom::PostDraw()
 
 	// コマンドリストのリセット
 	commandList->Reset(commandAllocator.Get(), nullptr);
+}
+
+ComPtr<IDxcBlob> DirXCom::CompileShader(const std::wstring& filePath, const wchar_t* profile)
+{
+	// シェーダーファイルを読み込む
+	ComPtr<IDxcBlobEncoding> shaderSource = nullptr;
+	HRESULT hr = dxcUtils->LoadFile(filePath.c_str(), nullptr, &shaderSource);
+	assert(SUCCEEDED(hr));
+
+	DxcBuffer shaderSourceBuffer{ shaderSource->GetBufferPointer(), shaderSource->GetBufferSize(), DXC_CP_UTF8 };
+	LPCWSTR arguments[] = { filePath.c_str(), L"-E", L"main", L"-T", profile, L"-Zi", L"-Qembed_debug", L"-Od", L"-Zpr", L"-HV", L"2021" };
+
+	// コンパイルする
+	ComPtr<IDxcResult> shaderResult = nullptr;
+	hr = dxcCompiler->Compile(&shaderSourceBuffer, arguments, _countof(arguments), includeHandler.Get(), IID_PPV_ARGS(&shaderResult));
+	assert(SUCCEEDED(hr));
+
+	// コンパイル結果を取得
+	ComPtr<IDxcBlob> shaderBlob = nullptr;
+	hr = shaderResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr);
+	assert(SUCCEEDED(hr));
+	return shaderBlob;
+}
+
+ComPtr<ID3D12Resource> DirXCom::CreateBufferResource(size_t sizeInBytes)
+{
+	// アップロードヒープ
+	D3D12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
+	// バッファリソースの設定
+	D3D12_RESOURCE_DESC resourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeInBytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
+	// リソースの生成
+	ComPtr<ID3D12Resource> resource = nullptr;
+	HRESULT hr = device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&resource));
+	assert(SUCCEEDED(hr));
+	return resource;
+}
+
+ComPtr<ID3D12Resource> DirXCom::CreateTextureResource(const DirectX::TexMetadata& metadata)
+{
+	// metadataを基にResourceの設定
+	D3D12_RESOURCE_DESC resourceDesc{};
+	resourceDesc.Width = UINT(metadata.width);
+	resourceDesc.Height = UINT(metadata.height);
+	resourceDesc.MipLevels = UINT16(metadata.mipLevels);
+	resourceDesc.DepthOrArraySize = UINT16(metadata.arraySize);
+	resourceDesc.Format = metadata.format;
+	resourceDesc.SampleDesc.Count = 1;
+	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION(metadata.dimension);
+
+	// 利用するHeapの設定
+	D3D12_HEAP_PROPERTIES heapProperties{};
+	heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+	// Resourceの生成
+	ComPtr<ID3D12Resource> resource = nullptr;
+	HRESULT hr = device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&resource));
+	assert(SUCCEEDED(hr));
+	return resource;
+}
+
+void DirXCom::UploadTextureData(const ComPtr<ID3D12Resource>& texture, const DirectX::ScratchImage& mipImages)
+{
+	// Meta情報を取得してサブリソースを準備
+	std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+	DirectX::PrepareUpload(device.Get(), mipImages.GetImages(), mipImages.GetImageCount(), mipImages.GetMetadata(), subresources);
+
+	// 中間リソースを生成して転送コマンドを積む
+	uint64_t intermediateSize = GetRequiredIntermediateSize(texture.Get(), 0, UINT(subresources.size()));
+	ComPtr<ID3D12Resource> intermediateResource = CreateBufferResource(intermediateSize);
+	UpdateSubresources(commandList.Get(), texture.Get(), intermediateResource.Get(), 0, 0, UINT(subresources.size()), subresources.data());
+
+	// COPY_DEST から GENERIC_READ へ変更
+	D3D12_RESOURCE_BARRIER barrier{};
+	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Transition.pResource = texture.Get();
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
+	commandList->ResourceBarrier(1, &barrier);
+
+	// 中間リソースが消える前に転送を完了させる（戻り値をvoidにしているため）
+	commandList->Close();
+	ID3D12CommandList* commandLists[] = { commandList.Get() };
+	commandQueue->ExecuteCommandLists(1, commandLists);
+	fenceValue++;
+	commandQueue->Signal(fence.Get(), fenceValue);
+	if (fence->GetCompletedValue() < fenceValue)
+	{
+		fence->SetEventOnCompletion(fenceValue, fenceEvent);
+		WaitForSingleObject(fenceEvent, INFINITE);
+	}
+	commandAllocator->Reset();
+	commandList->Reset(commandAllocator.Get(), nullptr);
+}
+
+DirectX::ScratchImage DirXCom::LoadTexture(const std::string& filePath)
+{
+	// テクスチャファイルを読み込んでプログラムで扱えるようにする
+	DirectX::ScratchImage image{};
+	std::wstring filePathW = ConvertString(filePath);
+	HRESULT hr = DirectX::LoadFromWICFile(filePathW.c_str(), DirectX::WIC_FLAGS_FORCE_SRGB, nullptr, image);
+	assert(SUCCEEDED(hr));
+
+	// ミップマップの作成
+	DirectX::ScratchImage mipImages{};
+	hr = DirectX::GenerateMipMaps(image.GetImages(), image.GetImageCount(), image.GetMetadata(), DirectX::TEX_FILTER_SRGB, 0, mipImages);
+	assert(SUCCEEDED(hr));
+
+	return mipImages;
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE DirXCom::GetSRVCPUDescriptorHandle(uint32_t index)

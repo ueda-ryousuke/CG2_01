@@ -5,7 +5,9 @@
 #include <dxcapi.h>
 #include <array>
 #include <cstdint>
+#include <string>
 #include "WindowsAPI.h"
+#include "externals/DirectXTex/DirectXTex.h"
 
 class DirXCom
 {
@@ -29,6 +31,39 @@ public: // メンバ関数
 	void PreDraw();
 	// 描画後処理
 	void PostDraw();
+
+	/// <summary>
+	/// シェーダーのコンパイル
+	/// </summary>
+	Microsoft::WRL::ComPtr<IDxcBlob> CompileShader(
+		const std::wstring& filePath,
+		const wchar_t* profile);
+
+	/// <summary>
+	/// バッファリソースの生成
+	/// </summary>
+	Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferResource(size_t sizeInBytes);
+
+	/// <summary>
+	/// テクスチャリソースの生成
+	/// </summary>
+	Microsoft::WRL::ComPtr<ID3D12Resource> CreateTextureResource(const DirectX::TexMetadata& metadata);
+
+	/// <summary>
+	/// テクスチャデータの転送
+	/// </summary>
+	void UploadTextureData(const Microsoft::WRL::ComPtr<ID3D12Resource>& texture, const DirectX::ScratchImage& mipImages);
+
+	/// <summary>
+	/// テクスチャファイルの読み込み
+	/// </summary>
+	/// <param name="filePath">テクスチャファイルのパス</param>
+	/// <returns>画像イメージデータ</returns>
+	static DirectX::ScratchImage LoadTexture(const std::string& filePath);
+
+	// getter
+	ID3D12Device* GetDevice() const { return device.Get(); }
+	ID3D12GraphicsCommandList* GetCommandList() const { return commandList.Get(); }
 
 private: // 初期化用のメンバ関数
 	// デバイスの初期化
