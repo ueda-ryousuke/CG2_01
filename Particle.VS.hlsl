@@ -1,6 +1,6 @@
 #include "Particle.hlsli"
 
-StructuredBuffer<TransformationMatrix> gTransformationMatrices : register(t0);
+StructuredBuffer<ParticleForGPU> gTransformationMatrices : register(t0);
 
 VertexShaderOutput main(VertexShaderInput input, uint32_t instanceId : SV_InstanceID)
 {
@@ -9,6 +9,7 @@ VertexShaderOutput main(VertexShaderInput input, uint32_t instanceId : SV_Instan
     output.position = mul(input.position, gTransformationMatrices[instanceId].wvp);
     output.texcoord = input.texcoord;
     output.normal = normalize(mul(input.normal, (float3x3) gTransformationMatrices[instanceId].world));
+    output.color = gTransformationMatrices[instanceId].color;
     
     return output;
 }

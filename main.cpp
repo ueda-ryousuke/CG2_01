@@ -8,6 +8,7 @@
 #include <vector>
 #include <wincodec.h>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>  
 #include <sstream>  
 #include <iterator>
@@ -122,6 +123,10 @@ struct Material
 };
 
 struct TransformationMatrix { Matrix4x4 wvp; Matrix4x4 world; };
+// 竜巻用：インスタンス1粒ごとの行列＋色（HLSLのParticleForGPUと一致させる）
+struct ParticleForGPU { Matrix4x4 wvp; Matrix4x4 world; Vector4 color; };
+// 竜巻1粒ぶんのパラメータ
+struct TornadoParticle { float angle; float height; float radiusOffset; float riseSpeed; float phase; };
 struct Transform
 {
 	Vector3 scale{ 1.0f, 1.0f, 1.0f };
@@ -300,7 +305,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	RegisterClass(&wc);
 	const int32_t kClientWidth = 1280; const int32_t kClientHeight = 720;
 	RECT wrc = { 0, 0, kClientWidth, kClientHeight }; AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);
-	HWND hwnd = CreateWindow(wc.lpszClassName, L"CG2_evaluation_Work3", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top, nullptr, nullptr, wc.hInstance, nullptr);
+	HWND hwnd = CreateWindow(wc.lpszClassName, L"LE2C_04_ウエダ_リョウスケ", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top, nullptr, nullptr, wc.hInstance, nullptr);
 	ShowWindow(hwnd, SW_SHOW);
 
 	{
@@ -431,6 +436,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		particlePsoDesc.pRootSignature = particleRootSignature.Get();
 		particlePsoDesc.VS = { particleVSBlob->GetBufferPointer(), particleVSBlob->GetBufferSize() };
 		particlePsoDesc.PS = { particlePSBlob->GetBufferPointer(), particlePSBlob->GetBufferSize() };
+		// 半透明の粒が互いを隠さないように、深度書き込みだけ切る
+		particlePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> particlePipelineState = nullptr;
 		device->CreateGraphicsPipelineState(&particlePsoDesc, IID_PPV_ARGS(&particlePipelineState));
 
@@ -439,7 +446,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		ModelData planeModelData = LoadObjFile("resources", "plane.obj");
 		ModelData sphereModelData = CreateSphereModel(32);
 		ModelData fenceModelData = LoadObjFile("resources", "fence.obj");
-		ModelData particleModelData = CreateParticleModel(); 
+		ModelData particleModelData = CreateParticleModel();
 
 		// Planeバッファ
 		D3D12_RESOURCE_DESC vertexResourceDescPlane{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(Vertex) * planeModelData.vertices.size(), 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
@@ -522,19 +529,20 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		Transform transformSprite;
 		Transform uvTransformSprite;
 
-		const uint32_t kNumInstance = 10; // インスタンス数
-		D3D12_RESOURCE_DESC instancingResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(TransformationMatrix) * kNumInstance, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
+		const uint32_t kNumInstance = 400; // インスタンス数（竜巻の粒の数）
+		D3D12_RESOURCE_DESC instancingResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, sizeof(ParticleForGPU) * kNumInstance, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
 		Microsoft::WRL::ComPtr<ID3D12Resource> instancingResource = nullptr;
 		device->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &instancingResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&instancingResource));
 
 		// 書き込むためのアドレスを取得
-		TransformationMatrix* instancingData = nullptr;
+		ParticleForGPU* instancingData = nullptr;
 		instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingData));
 		// 単位行列を書きこんでおく
 		for (uint32_t index = 0; index < kNumInstance; ++index)
 		{
 			instancingData[index].wvp = Matrix4x4::MakeIdentity4x4();
 			instancingData[index].world = Matrix4x4::MakeIdentity4x4();
+			instancingData[index].color = { 1.0f, 1.0f, 1.0f, 1.0f };
 		}
 
 		D3D12_RESOURCE_DESC directionalLightResourceDesc{ D3D12_RESOURCE_DIMENSION_BUFFER, 0, (sizeof(DirectionalLight) + 255) & ~255, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
@@ -577,7 +585,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		instancingSrvDesc.Buffer.FirstElement = 0;
 		instancingSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 		instancingSrvDesc.Buffer.NumElements = kNumInstance;
-		instancingSrvDesc.Buffer.StructureByteStride = sizeof(TransformationMatrix);
+		instancingSrvDesc.Buffer.StructureByteStride = sizeof(ParticleForGPU);
 
 		// Heapの空いている4番目にInstancing用のSRVを作成する
 		D3D12_CPU_DESCRIPTOR_HANDLE instancingSrvHandleCPU = GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 4);
@@ -595,17 +603,22 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 		DebugCamera debugCamera; debugCamera.Initialize();
 		bool isAutoRotate = false; bool useMonsterBall = false;
 		float pi_f = 3.1415926535f;
-		bool drawSprite = true;
+		bool drawSprite = false; // 竜巻だけ見せるのでスプライトは非表示
 
-		int currentModelType = 3;
+		int currentModelType = 3; // 3 = Particle(Instancing) 竜巻
 
-		Transform transforms[kNumInstance];
+		// 竜巻の粒の初期値（乱数で高さ・角度・太さをばらつかせる）
+		TornadoParticle tornado[kNumInstance];
 		for (uint32_t index = 0; index < kNumInstance; ++index)
 		{
-			transforms[index].scale = { 1.0f, 1.0f, 1.0f };
-			transforms[index].rotate = { 0.0f, 0.0f, 0.0f };
-			transforms[index].translate = { index * 0.1f, index * 0.1f, index * 0.1f };
+			auto rnd = []() { return (float)std::rand() / (float)RAND_MAX; };
+			tornado[index].angle = rnd() * pi_f * 2.0f;
+			tornado[index].height = rnd();                 // 0〜1（下〜上）
+			tornado[index].radiusOffset = (rnd() - 0.5f) * 0.4f;
+			tornado[index].riseSpeed = 0.08f + rnd() * 0.12f;
+			tornado[index].phase = rnd() * pi_f * 2.0f;
 		}
+		float tornadoTime = 0.0f;
 
 		MSG msg{};
 		while (msg.message != WM_QUIT)
@@ -674,7 +687,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 				ImGui::End(); ImGui::Render();
 #endif
-
+				tornadoTime += 0.016f;
 				Matrix4x4 materialTransformMatrix = MakeUVTransformMatrix(uvTransformSprite.scale, uvTransformSprite.rotate.z, uvTransformSprite.translate);
 				materialDataSprite->uvTransform = materialTransformMatrix;
 
@@ -685,12 +698,39 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 				wvpData->world = worldMatrixModel;
 
 				Matrix4x4 viewProjectionMatrix = Matrix4x4::Multiply(viewMatrix, projectionMatrixModel);
+				// ===== 竜巻：Instancingで1粒ずつ位置・色・透明度を更新 =====
 				for (uint32_t index = 0; index < kNumInstance; ++index)
 				{
-					Matrix4x4 worldMatrix = Matrix4x4::MakeAffineMatrix(transforms[index].scale, transforms[index].rotate, transforms[index].translate);
-					Matrix4x4 worldViewProjectionMatrix = Matrix4x4::Multiply(worldMatrix, viewProjectionMatrix);
-					instancingData[index].wvp = worldViewProjectionMatrix;
+					const TornadoParticle& p = tornado[index];
+
+					// 下から上へ上昇し、上まで行ったら下に戻る（0〜1ループ）
+					float h = std::fmod(p.height + tornadoTime * p.riseSpeed, 1.0f);
+
+					// 上に行くほど広がる漏斗型。下ほど速く回る
+					float radius = 0.2f + h * 1.8f + p.radiusOffset * (0.3f + h);
+					float angle = p.angle + tornadoTime * (4.0f - h * 2.5f);
+
+					Transform t;
+					float size = 0.08f + h * 0.12f;
+					t.scale = { size, size, size };
+					t.rotate = { 0.0f, pi_f * 0.5f - angle, tornadoTime * 2.0f + p.phase };
+					t.translate = { std::cos(angle) * radius, h * 4.0f - 2.0f, std::sin(angle) * radius };
+
+					Matrix4x4 worldMatrix = Matrix4x4::MakeAffineMatrix(t.scale, t.rotate, t.translate);
+					instancingData[index].wvp = Matrix4x4::Multiply(worldMatrix, viewProjectionMatrix);
 					instancingData[index].world = worldMatrix;
+
+					// 色：時間と高さで色相が回り続ける（HSV→RGB）
+					float hue = std::fmod(tornadoTime * 0.15f + h * 0.6f + p.phase * 0.05f, 1.0f);
+					float r = std::fabs(hue * 6.0f - 3.0f) - 1.0f;
+					float g = 2.0f - std::fabs(hue * 6.0f - 2.0f);
+					float b = 2.0f - std::fabs(hue * 6.0f - 4.0f);
+					auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+
+					// 透明度：下と上でフェードし、粒ごとにゆっくり明滅
+					float alpha = std::sin(pi_f * h) * (0.7f + 0.3f * std::sin(tornadoTime * 3.0f + p.phase));
+
+					instancingData[index].color = { clamp01(r), clamp01(g), clamp01(b), alpha };
 				}
 
 				Matrix4x4 worldMatrixSprite = Matrix4x4::MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);

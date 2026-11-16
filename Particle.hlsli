@@ -10,6 +10,7 @@ struct VertexShaderOutput
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD0;
     float3 normal : NORMAL0; // 💡VSからPSへ渡すために法線を追加
+    float4 color : COLOR0; // パーティクル1粒ごとの色（透明度含む）
 };
 
 
@@ -28,4 +29,12 @@ struct TransformationMatrix
 {
     float4x4 wvp;
     float4x4 world; // 💡ワールド行列を追加
+};
+
+// 竜巻用：1粒ごとの行列と色
+struct ParticleForGPU
+{
+    float4x4 wvp;
+    float4x4 world;
+    float4 color;
 };
